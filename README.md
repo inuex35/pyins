@@ -1,6 +1,6 @@
 # PyINS - Python GNSS/INS Processing Library
 
-PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, RTK, sensor fusion, and coordinate transformations. Inspired by gnss-py, rtklib-py, and OB-GINS.
+PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, RTK, sensor fusion, and coordinate transformations. Inspired by RTKLIB and gnss-py.
 
 ## Features
 
@@ -28,7 +28,7 @@ PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, 
 
 ### Install from source
 ```bash
-git clone https://github.com/yourusername/pyins.git
+git clone https://github.com/inuex35/pyins.git
 cd pyins
 pip install -e .
 ```
@@ -259,13 +259,29 @@ Contributions are welcome! Please submit pull requests or open issues on GitHub.
 
 ## License
 
-MIT License
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## References
+## Acknowledgments and Third-Party Licenses
 
-- RTKLIB: Open-source GNSS positioning
-- gnss-py: GNSS processing in Python
-- OB-GINS: Open-source GNSS/INS software
+### RTKLIB Attribution
+
+This software includes algorithms and concepts inspired by [RTKLIB](https://github.com/tomojitakasu/RTKLIB), an open-source GNSS positioning library.
+
+```
+RTKLIB: An Open Source Program Package for GNSS Positioning
+Copyright (c) 2007-2013, T. Takasu, All rights reserved.
+
+RTKLIB is distributed under the BSD 2-clause license.
+```
+
+We acknowledge the significant contributions of RTKLIB to the GNSS community and thank T. Takasu for making this valuable software available as open source.
+
+### Other References
+
+- **gnss-py**: GNSS processing in Python
+- **rtklib-py**: Python wrapper for RTKLIB
+
+The PyINS library reimplements and extends concepts from these projects while maintaining compatibility with standard GNSS processing workflows.
 
 ## Citation
 
@@ -273,7 +289,7 @@ If you use PyINS in your research, please cite:
 ```
 @software{pyins,
   title = {PyINS: Python GNSS/INS Processing Library},
-  url = {https://github.com/yourusername/pyins},
+  url = {https://github.com/inuex35/pyins},
   year = {2024}
 }
 ```

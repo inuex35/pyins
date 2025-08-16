@@ -1,0 +1,30 @@
+PyINS - Python GNSS/INS Processing Library
+Copyright 2024 inuex35
+
+This product includes software developed at:
+- PyINS project (https://github.com/inuex35/pyins)
+
+This software contains algorithms and concepts inspired by or derived from:
+
+1. RTKLIB: An Open Source Program Package for GNSS Positioning
+   Copyright (c) 2007-2013, T. Takasu, All rights reserved.
+   Licensed under BSD 2-clause license
+   Source: https://github.com/tomojitakasu/RTKLIB
+
+2. gnss-py: GNSS processing in Python
+   Various contributors
+   
+3. rtklib-py: Python wrapper for RTKLIB
+   Various contributors
+
+The algorithms implemented in this software, particularly those related to:
+- GNSS positioning calculations
+- RTK double difference processing
+- Satellite orbit computations
+- Time system conversions
+- Coordinate transformations
+
+are based on standard GNSS processing techniques as documented in scientific literature
+and implemented in open-source software packages, especially RTKLIB.
+
+We acknowledge the significant contributions of these projects to the GNSS community.
