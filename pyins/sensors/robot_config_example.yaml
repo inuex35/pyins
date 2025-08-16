@@ -1,0 +1,59 @@
+# Example robot lever arm configuration file
+# All positions are in meters relative to the base frame
+# Rotations are 3x3 matrices (identity if not specified)
+
+base_frame_id: base
+
+components:
+  # Robot base/center reference point
+  base:
+    position: [0.0, 0.0, 0.0]
+    rotation: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    description: "Robot base center"
+  
+  # IMU sensor
+  imu:
+    position: [0.1, 0.0, 0.05]
+    description: "Inertial Measurement Unit"
+  
+  # GNSS antennas
+  gnss_main:
+    position: [0.2, 0.0, 0.3]
+    description: "Main GNSS antenna"
+  
+  gnss_aux:
+    position: [-0.2, 0.0, 0.3]
+    description: "Auxiliary GNSS antenna for heading"
+  
+  # Wheel encoders
+  wheel_front_left:
+    position: [0.3, 0.2, -0.1]
+    description: "Front left wheel encoder"
+  
+  wheel_front_right:
+    position: [0.3, -0.2, -0.1]
+    description: "Front right wheel encoder"
+  
+  wheel_rear_left:
+    position: [-0.3, 0.2, -0.1]
+    description: "Rear left wheel encoder"
+  
+  wheel_rear_right:
+    position: [-0.3, -0.2, -0.1]
+    description: "Rear right wheel encoder"
+  
+  # Camera sensors
+  camera_front:
+    position: [0.35, 0.0, 0.15]
+    rotation: [[1, 0, 0], [0, 0.866, -0.5], [0, 0.5, 0.866]]  # 30 deg pitch down
+    description: "Front-facing camera"
+  
+  camera_rear:
+    position: [-0.35, 0.0, 0.15]
+    rotation: [[-1, 0, 0], [0, 0.866, -0.5], [0, -0.5, -0.866]]  # 180 deg yaw, 30 deg pitch down
+    description: "Rear-facing camera"
+  
+  # Lidar sensor
+  lidar:
+    position: [0.0, 0.0, 0.4]
+    description: "360-degree lidar sensor"

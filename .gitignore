@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data files (large)
+*.csv
+*.obs
+*.nav
+
+# Results
+*.png
+*.kml
+
+# Keep example results
+!example_results/
+
+# OS
+.DS_Store
+Thumbs.db
