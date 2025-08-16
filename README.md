@@ -6,12 +6,12 @@ PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, 
 
 ### GNSS Processing
 - **Multi-constellation support**: GPS, Galileo, BeiDou, GLONASS, QZSS
-- **RINEX file I/O**: Observation and navigation file parsing
-- **Single Point Positioning (SPP)**: With iterative least squares and Sagnac correction
-- **RTK (Real-Time Kinematic)**: Double difference processing with per-system reference satellites
-- **Ephemeris handling**: Optimal satellite selection and position computation
-- **Time management**: Unified TimeCore system for all GNSS time systems
-- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA)
+- **RINEX file I/O**: Observation and navigation file parsing using gnsspy
+- **Robust Single Point Positioning (SPP)**: With iterative least squares, troposphere modeling, and multi-GNSS support
+- **RTK (Real-Time Kinematic)**: Double difference processing with data synchronization and interpolation
+- **Ephemeris handling**: Satellite selection and position computation with time-safe ephemeris
+- **Time management**: Unified TimeCore system for all GNSS time systems with automatic conversions
+- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA method)
 
 ### Sensor Fusion & IMU
 - **IMU mechanization**: Preintegration and bias estimation
@@ -53,7 +53,7 @@ gnsspy
 ### Single Point Positioning (SPP)
 ```python
 from pyins.io.rinex import RinexObsReader, RinexNavReader
-from pyins.gnss.spp import single_point_positioning
+from pyins.gnss import robust_spp_solve
 from pyins.coordinate import ecef2llh
 import numpy as np
 
@@ -68,14 +68,14 @@ nav_data = nav_reader.read()
 epoch = obs_data[0]
 observations = epoch['observations']
 
-# Solve for position
-solution, used_sats = single_point_positioning(
+# Solve for position using robust SPP
+solution = robust_spp_solve(
     observations, 
     nav_data,
     systems_to_use=['G', 'E', 'C']  # GPS, Galileo, BeiDou
 )
 
-if solution:
+if solution and solution.valid:
     llh = ecef2llh(solution.rr)
     print(f"Position: lat={np.rad2deg(llh[0]):.6f}°, "
           f"lon={np.rad2deg(llh[1]):.6f}°, h={llh[2]:.1f}m")
@@ -83,8 +83,9 @@ if solution:
 
 ### RTK Double Difference
 ```python
-from pyins.rtk import DoubleDifferencePerSystem, DDLeastSquares
+from pyins.rtk import DoubleDifferenceProcessor, DDLeastSquares, interpolate_epoch
 from pyins.io.rinex import RinexObsReader, RinexNavReader
+from pyins.coordinate import ecef2llh, ecef2enu
 
 # Read rover and base data
 rover_obs = RinexObsReader('rover.obs').read()
@@ -92,18 +93,22 @@ base_obs = RinexObsReader('base.obs').read()
 nav_data = RinexNavReader('nav.nav').read()
 
 # Initialize processors
-dd_processor = DoubleDifferencePerSystem()
+dd_processor = DoubleDifferenceProcessor()
 dd_solver = DDLeastSquares()
 
-# Process epoch
+# Synchronize and interpolate data
+rover_epoch = rover_obs[0]
+base_epoch = interpolate_epoch(base_obs, rover_epoch['time'])
+
+# Process double differences
 dd_obs = dd_processor.process(
-    rover_obs[0]['observations'],
-    base_obs[0]['observations'],
+    rover_epoch['observations'],
+    base_epoch['observations'],
     nav_data
 )
 
 # Solve for baseline
-baseline = dd_solver.solve(dd_obs, base_position)
+baseline = dd_solver.solve(dd_obs, base_position_ecef)
 ```
 
 ### Time Management with TimeCore
@@ -131,29 +136,36 @@ dt = tc2 - tc    # Difference in seconds
 
 ### Factor Graph Optimization
 ```python
-from pyins.fusion import GraphOptimizer, PseudorangeFactor, DopplerFactor
+from pyins.fusion.graph_optimizer import FactorGraph
+from pyins.fusion.pseudorange_factor import PseudorangeFactor
+from pyins.fusion.doppler_factor import DopplerFactor
+from pyins.fusion.state import NavigationState
 
-# Create optimizer
-optimizer = GraphOptimizer()
+# Create factor graph
+graph = FactorGraph()
 
-# Add factors
+# Create navigation state
+state = NavigationState()
+
+# Add pseudorange factor
 pr_factor = PseudorangeFactor(
-    measurement=pseudorange,
-    satellite_pos=sat_pos,
+    observation=observation,
+    satellite_info=sat_info,
     weight=1.0/pr_variance
 )
 
+# Add Doppler factor  
 doppler_factor = DopplerFactor(
-    measurement=doppler,
-    satellite_vel=sat_vel,
+    measurement=doppler_obs,
+    satellite_velocity=sat_vel,
     weight=1.0/doppler_variance
 )
 
-optimizer.add_factor(pr_factor)
-optimizer.add_factor(doppler_factor)
+graph.add_factor(pr_factor)
+graph.add_factor(doppler_factor)
 
 # Optimize
-result = optimizer.optimize(initial_state)
+result = graph.optimize()
 ```
 
 ## Module Structure
@@ -190,8 +202,11 @@ pyins/
 
 ### Basic Examples
 ```bash
-# Single Point Positioning
-python examples/simple_example.py
+# Multi-GNSS SPP processing
+python pyins/examples/multi_gnss_spp.py
+
+# SPP with TimeCore integration
+python pyins/examples/spp_with_timecore.py
 
 # RTK Double Difference
 python examples/rtk_double_difference_example.py
@@ -201,12 +216,6 @@ python examples/robot_lever_arm_usage.py
 
 # Factor graph with weighted measurements
 python examples/weighted_factor_usage.py
-```
-
-### Export to KML
-```bash
-# Convert trajectory to Google Earth format
-python export_to_kml.py input.csv output.kml
 ```
 
 ## Satellite Numbering Convention
@@ -244,10 +253,10 @@ BeiDou uses BDT with a 14-second offset from GPS time, handled automatically by 
 #### TimeCore
 Unified time management for all GNSS systems.
 
-#### GraphOptimizer
-Factor graph optimization for sensor fusion.
+#### FactorGraph
+Factor graph optimization for sensor fusion with pseudorange and Doppler factors.
 
-#### DoubleDifferencePerSystem
+#### DoubleDifferenceProcessor
 RTK double difference processing with per-system reference satellites.
 
 #### RobotLeverArm
