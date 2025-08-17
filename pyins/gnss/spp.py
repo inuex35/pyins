@@ -17,6 +17,7 @@
 import numpy as np
 from typing import List, Tuple, Optional
 from ..core.constants import *
+from ..core.constants import sat2sys, SYS_GAL, SYS_BDS
 from ..core.data_structures import Observation, NavigationData, Solution
 from ..gnss.ephemeris import seleph, eph2pos
 from ..coordinate import ecef2llh, llh2ecef
@@ -220,6 +221,41 @@ def robust_spp_solve(observations: List[Observation],
             # Get satellite system
             sys = sat2sys(obs.sat)
             
+            # Filter out problematic GAL 101 satellite
+            if sys == SYS_GAL and obs.sat == 101:
+                if iteration == 0:
+                    logger.debug(f"Skipping problematic GAL satellite {obs.sat}")
+                continue
+            
+            # Filter out BDS GEO satellites (PRN 1-5, 59-63)
+            # These satellites have very high orbits and can cause issues
+            if sys == SYS_BDS:
+                from ..core.constants import sat2prn
+                prn = sat2prn(obs.sat)
+                if prn <= 5 or prn >= 59:
+                    if iteration == 0:
+                        logger.debug(f"Skipping BDS GEO satellite {obs.sat} (PRN {prn})")
+                    continue
+            
+            # Filter satellites with abnormal pseudorange (>30000km for non-GEO)
+            # Get first available pseudorange
+            pr = 0
+            if len(freqs) > 0:
+                # freqs is a list of frequency indices
+                freq_idx = freqs[0] if isinstance(freqs[0], int) else freqs[0][0] if isinstance(freqs[0], tuple) else 0
+                if freq_idx < len(obs.P):
+                    pr = obs.P[freq_idx]
+            if pr <= 0:
+                # Try to find any valid pseudorange
+                for freq_idx in range(len(obs.P)):
+                    if obs.P[freq_idx] > 0:
+                        pr = obs.P[freq_idx]
+                        break
+            if pr > 30000000:  # 30,000 km threshold
+                if iteration == 0:
+                    logger.debug(f"Skipping sat {obs.sat}: abnormal pseudorange {pr/1000:.0f}km")
+                continue
+            
             # Geometric range
             r = norm(sat_pos - x[:3])
             
@@ -356,8 +392,6 @@ def robust_spp_solve(observations: List[Observation],
                 freq_count = {0: 0, 1: 0, 2: 0}
                 for info in measurement_info:
                     freq_count[info['freq']] += 1
-                logger.info(f"Multi-frequency SPP converged with {len(H)} measurements")
-                logger.info(f"Frequency usage: L1={freq_count[0]}, L2={freq_count[1]}, L5={freq_count.get(2, 0)}")
             
             # Create solution
             # The state vector x has clock biases in meters:
@@ -375,27 +409,30 @@ def robust_spp_solve(observations: List[Observation],
             # A typical receiver clock bias is around 70-80ms (21000-24000 km)
             # But it can vary significantly
             
-            # For now, keep the relative clock biases
-            dtr_meters = x[3:8].copy()  # Clock biases in meters
+            # RTKLIB style: GPS clock and ISBs
+            # x[3] = GPS clock bias
+            # x[4] = GLO clock bias = GPS clock + GLO ISB
+            # x[5] = GAL clock bias = GPS clock + GAL ISB
+            # x[6] = BDS clock bias = GPS clock + BDS ISB
+            # x[7] = QZS clock bias = GPS clock (same system)
             
-            # If GPS clock is very small (< 1000m), it means the absolute bias was absorbed
-            # Estimate it from typical satellite range (~70ms light travel time)
-            if abs(dtr_meters[0]) < 1000.0:
-                # Estimate from average satellite distance
-                # Most GNSS satellites are at ~20,000-26,000 km
-                # Light travel time is about 70-85 ms
-                estimated_gps_clock = 75e-3 * CLIGHT  # 75ms = 22,500 km
-                
-                # Adjust all clocks by adding the estimated GPS clock
-                dtr_meters_absolute = dtr_meters.copy()
-                dtr_meters_absolute[0] = estimated_gps_clock  # GPS absolute
-                dtr_meters_absolute[1] = estimated_gps_clock + (dtr_meters[1] - dtr_meters[0])  # GLO absolute
-                dtr_meters_absolute[2] = estimated_gps_clock + (dtr_meters[2] - dtr_meters[0])  # GAL absolute  
-                dtr_meters_absolute[3] = estimated_gps_clock + (dtr_meters[3] - dtr_meters[0])  # BDS absolute
-                dtr_meters_absolute[4] = estimated_gps_clock  # QZS (same as GPS)
-            else:
-                # Use the values as-is if GPS clock is already significant
-                dtr_meters_absolute = dtr_meters.copy()
+            raw_clocks = x[3:8].copy()  # Raw clock biases from solution
+            
+            # Create RTKLIB-style output:
+            # dtr_meters[0] = GPS clock
+            # dtr_meters[1] = GLO ISB (relative to GPS)
+            # dtr_meters[2] = GAL ISB (relative to GPS)
+            # dtr_meters[3] = BDS ISB (relative to GPS)
+            # dtr_meters[4] = QZS ISB (0 for QZS as it's same as GPS)
+            dtr_meters = np.zeros(5)
+            dtr_meters[0] = raw_clocks[0]  # GPS clock
+            dtr_meters[1] = raw_clocks[1] - raw_clocks[0] if len(raw_clocks) > 1 else 0.0  # GLO ISB
+            dtr_meters[2] = raw_clocks[2] - raw_clocks[0] if len(raw_clocks) > 2 else 0.0  # GAL ISB
+            dtr_meters[3] = raw_clocks[3] - raw_clocks[0] if len(raw_clocks) > 3 else 0.0  # BDS ISB
+            dtr_meters[4] = 0.0  # QZS ISB (same as GPS)
+            
+            # For compatibility, also keep absolute values
+            dtr_meters_absolute = raw_clocks.copy()
             
             # Convert to seconds for standard output
             dtr_seconds = dtr_meters / CLIGHT  # Relative values in seconds
