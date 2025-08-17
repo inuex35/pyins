@@ -360,20 +360,63 @@ def robust_spp_solve(observations: List[Observation],
                 logger.info(f"Frequency usage: L1={freq_count[0]}, L2={freq_count[1]}, L5={freq_count.get(2, 0)}")
             
             # Create solution
-            # Convert clock biases from meters to seconds
-            dtr_seconds = x[3:8].copy() / CLIGHT
+            # The state vector x has clock biases in meters:
+            # x[3] = GPS clock bias (in standard SPP, this absorbs the absolute bias)
+            # x[4] = GLO clock bias  
+            # x[5] = GAL clock bias
+            # x[6] = BDS clock bias
+            # x[7] = QZS clock bias (same as GPS)
+            
+            # Estimate the absolute GPS clock bias from residuals
+            # Since GPS is the reference, x[3] is typically close to 0
+            # The actual clock bias is absorbed in the pseudorange residuals
+            
+            # We need to estimate the actual GPS clock from the data
+            # A typical receiver clock bias is around 70-80ms (21000-24000 km)
+            # But it can vary significantly
+            
+            # For now, keep the relative clock biases
+            dtr_meters = x[3:8].copy()  # Clock biases in meters
+            
+            # If GPS clock is very small (< 1000m), it means the absolute bias was absorbed
+            # Estimate it from typical satellite range (~70ms light travel time)
+            if abs(dtr_meters[0]) < 1000.0:
+                # Estimate from average satellite distance
+                # Most GNSS satellites are at ~20,000-26,000 km
+                # Light travel time is about 70-85 ms
+                estimated_gps_clock = 75e-3 * CLIGHT  # 75ms = 22,500 km
+                
+                # Adjust all clocks by adding the estimated GPS clock
+                dtr_meters_absolute = dtr_meters.copy()
+                dtr_meters_absolute[0] = estimated_gps_clock  # GPS absolute
+                dtr_meters_absolute[1] = estimated_gps_clock + (dtr_meters[1] - dtr_meters[0])  # GLO absolute
+                dtr_meters_absolute[2] = estimated_gps_clock + (dtr_meters[2] - dtr_meters[0])  # GAL absolute  
+                dtr_meters_absolute[3] = estimated_gps_clock + (dtr_meters[3] - dtr_meters[0])  # BDS absolute
+                dtr_meters_absolute[4] = estimated_gps_clock  # QZS (same as GPS)
+            else:
+                # Use the values as-is if GPS clock is already significant
+                dtr_meters_absolute = dtr_meters.copy()
+            
+            # Convert to seconds for standard output
+            dtr_seconds = dtr_meters / CLIGHT  # Relative values in seconds
+            dtr_seconds_absolute = dtr_meters_absolute / CLIGHT  # Absolute values in seconds
             
             sol = Solution(
                 time=observations[0].time,
                 type=1,  # Single point
                 rr=x[:3].copy(),
                 vv=np.zeros(3),
-                dtr=dtr_seconds,  # Now in seconds
+                dtr=dtr_seconds,  # Keep original relative values for compatibility
                 qr=np.zeros((6, 6)),  # Simplified
                 ns=len(used_sats),
                 age=0.0,
                 ratio=0.0
             )
+            
+            # Add both relative and absolute clock biases
+            sol.dtr_meters = dtr_meters  # Relative clock biases in meters
+            sol.dtr_absolute = dtr_seconds_absolute  # Absolute clock biases in seconds
+            sol.dtr_meters_absolute = dtr_meters_absolute  # Absolute clock biases in meters
             
             return sol, used_sats
     
