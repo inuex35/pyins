@@ -474,6 +474,7 @@ def satpos(obs, nav):
         except Exception as e:
             svh[i] = -1
             continue
+        # Check satellite health
         svh[i] = getattr(eph, 'svh', 0)
         
     return rs, dts, var, svh
