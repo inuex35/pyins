@@ -66,9 +66,8 @@ def robust_troposphere_model(pos: np.ndarray, el: float) -> float:
     return (zhd + zwd) * mapf
 
 
-def robust_spp_solve(observations: List[Observation], 
+def spp_solve(observations: List[Observation], 
                      nav_data: NavigationData,
-                     init_pos: Optional[np.ndarray] = None,
                      max_iter: int = 20,  # Increased iterations
                      converge_threshold: float = 0.1,  # 10cm convergence threshold
                      systems_to_use: Optional[List[str]] = None,
@@ -83,8 +82,6 @@ def robust_spp_solve(observations: List[Observation],
         List of GNSS observations
     nav_data : NavigationData
         Navigation data containing ephemerides
-    init_pos : Optional[np.ndarray]
-        Initial position estimate [x, y, z] in ECEF meters
     max_iter : int
         Maximum number of iterations
     converge_threshold : float
@@ -155,14 +152,9 @@ def robust_spp_solve(observations: List[Observation],
         logger.warning(f"Insufficient measurements: {total_measurements}")
         return None, []
     
-    # Initial state
-    if init_pos is None:
-        # Start from origin (0,0,0) like RTKLIB
-        x = np.zeros(8)  # pos(3) + clk_gps + clk_glo + clk_gal + clk_bds + clk_qzs
-        # x[:3] stays at [0, 0, 0] for first iteration
-    else:
-        x = np.zeros(8)
-        x[:3] = init_pos
+    # Initial state - always start from origin (0,0,0) like RTKLIB
+    x = np.zeros(8)  # pos(3) + clk_gps + clk_glo + clk_gal + clk_bds + clk_qzs
+    # x[:3] stays at [0, 0, 0] for first iteration
     
     # System indices for clock biases
     sys_clk_idx = {
@@ -484,5 +476,4 @@ def elevation_angle(rcv_pos: np.ndarray, sat_pos: np.ndarray, llh: np.ndarray) -
 
 
 # Alias for backward compatibility
-spp_solve = robust_spp_solve
-single_point_positioning = robust_spp_solve
+robust_spp_solve = spp_solve
