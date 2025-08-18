@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy import interpolate
+import warnings
 
 from ..core.constants import CLIGHT, SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, SYS_QZS
 from ..core.unified_time import TimeCore, TimeSystem
 from .sp3_downloader import download_sp3_cddis, download_clk_cddis, get_best_sp3_product
+from .sp3_interpolation import interpolate_sp3_position, interpolate_sp3_clock
 
 
 class SP3Ephemeris:
@@ -169,9 +171,11 @@ class SP3Ephemeris:
         return sp3_data
         
     def interpolate_position(self, sat_num: int, time: TimeCore, 
-                           poly_degree: int = 10) -> Tuple[np.ndarray, float, float]:
+                           poly_degree: int = 10, method: str = 'neville') -> Tuple[np.ndarray, float, float]:
         """
         Interpolate satellite position and clock at given time
+        
+        Uses RTKLIB/GNSSpy compatible interpolation methods.
         
         Parameters
         ----------
@@ -180,7 +184,9 @@ class SP3Ephemeris:
         time : TimeCore
             Time for interpolation
         poly_degree : int
-            Polynomial degree for interpolation
+            Polynomial degree for interpolation (default 10 for RTKLIB compatibility)
+        method : str
+            Interpolation method: 'neville' (RTKLIB), 'polyfit' (GNSSpy), 'lagrange'
             
         Returns
         -------
@@ -212,34 +218,33 @@ class SP3Ephemeris:
         if target_seconds < time_seconds[0] or target_seconds > time_seconds[-1]:
             print(f"Warning: Time {target_dt} is outside SP3 data range for satellite {sat_num}")
             return None, None, None
-            
-        # Find nearest epochs for interpolation
-        n_points = min(poly_degree + 1, len(time_seconds))
-        idx = np.searchsorted(time_seconds, target_seconds)
         
-        # Center the interpolation window
-        start_idx = max(0, idx - n_points // 2)
-        end_idx = min(len(time_seconds), start_idx + n_points)
-        if end_idx - start_idx < n_points:
-            start_idx = max(0, end_idx - n_points)
-            
-        # Extract data for interpolation
-        interp_times = time_seconds[start_idx:end_idx]
-        interp_positions = positions[start_idx:end_idx]
-        interp_clocks = clocks[start_idx:end_idx]
+        # Use the new interpolation methods
+        position, pos_success = interpolate_sp3_position(
+            time_seconds, positions, target_seconds, 
+            method=method, degree=poly_degree
+        )
         
-        # Polynomial interpolation for position
-        position = np.zeros(3)
-        for i in range(3):
-            coeffs = np.polyfit(interp_times, interp_positions[:, i], poly_degree)
-            position[i] = np.polyval(coeffs, target_seconds)
-            
-        # Linear interpolation for clock
-        clock_interp = interpolate.interp1d(interp_times, interp_clocks, kind='linear')
-        clock = float(clock_interp(target_seconds))
+        if not pos_success:
+            return None, None, None
         
-        # Estimate variance (simplified)
-        variance = 0.01  # 1 cm standard deviation for precise ephemeris
+        # Interpolate clock (linear interpolation is standard)
+        clock, clk_success = interpolate_sp3_clock(
+            time_seconds, clocks, target_seconds, method='linear'
+        )
+        
+        if not clk_success:
+            clock = 0.0  # Default if clock interpolation fails
+        
+        # Estimate variance based on interpolation method and degree
+        # For RTKLIB compatibility with degree 10: ~1cm accuracy
+        # For GNSSpy with degree 16: ~2.5cm accuracy  
+        if method == 'neville' and poly_degree == 10:
+            variance = 0.01  # 1 cm (RTKLIB standard)
+        elif method == 'polyfit' and poly_degree >= 16:
+            variance = 0.025  # 2.5 cm (GNSSpy with high degree)
+        else:
+            variance = 0.05  # 5 cm (conservative estimate)
         
         return position, clock, variance
         
