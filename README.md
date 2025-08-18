@@ -10,6 +10,7 @@ PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, 
 - **Robust Single Point Positioning (SPP)**: With iterative least squares, troposphere modeling, and multi-GNSS support
 - **RTK (Real-Time Kinematic)**: Double difference processing with data synchronization and interpolation
 - **Ephemeris handling**: Satellite selection and position computation with time-safe ephemeris
+- **SP3 Precise Ephemeris**: Support for IGS and MGEX precise orbit products with 40-80x accuracy improvement
 - **Time management**: Unified TimeCore system for all GNSS time systems with automatic conversions
 - **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA method)
 
@@ -111,6 +112,39 @@ dd_obs = dd_processor.process(
 baseline = dd_solver.solve(dd_obs, base_position_ecef)
 ```
 
+### SP3 Precise Ephemeris
+```python
+from pyins.gnss.sp3_ephemeris import SP3Ephemeris
+from pyins.gnss.ephemeris import compute_satellite_position
+from datetime import datetime
+
+# Initialize SP3 handler (defaults to MGEX for multi-GNSS)
+sp3 = SP3Ephemeris()
+
+# Download SP3 automatically (MGEX COD by default)
+sp3_file = sp3.download_sp3(datetime(2024, 1, 15))
+
+# Or get best available product
+sp3_file = sp3.get_auto_sp3(datetime.now(), prefer_mgex=True)
+
+# Read SP3 data
+sp3_data = sp3.read_sp3(sp3_file)
+
+# Interpolate satellite position (RTKLIB-compatible Neville method)
+from pyins.core.unified_time import TimeCore
+time = TimeCore.from_gps(2200, 345600.0)
+pos, clk = sp3.interpolate_position(sat_num=1, time=time, method='neville')
+
+# Unified interface for broadcast/SP3 ephemeris
+# Automatically uses SP3 if available, falls back to broadcast
+pos, clk, var = compute_satellite_position(
+    sat_num=1, 
+    time=time,
+    nav_or_sp3=sp3_data,  # Can be nav_data or sp3_data
+    prefer_mgex=True       # Prefer MGEX for multi-GNSS
+)
+```
+
 ### Time Management with TimeCore
 ```python
 from pyins.core.unified_time import TimeCore, TimeSystem
@@ -179,6 +213,9 @@ pyins/
 ├── gnss/           # GNSS processing
 │   ├── spp.py      # Single Point Positioning
 │   ├── ephemeris.py
+│   ├── sp3_ephemeris.py     # SP3 precise ephemeris
+│   ├── sp3_downloader_ftp.py # SP3/CLK downloader
+│   ├── sp3_interpolation.py  # Neville interpolation
 │   └── frequency.py
 ├── rtk/            # RTK processing
 │   ├── double_difference.py
@@ -208,6 +245,9 @@ python pyins/examples/multi_gnss_spp.py
 # SPP with TimeCore integration
 python pyins/examples/spp_with_timecore.py
 
+# SPP with SP3 precise ephemeris
+python pyins/examples/spp_with_sp3.py
+
 # RTK Double Difference
 python examples/rtk_double_difference_example.py
 
@@ -236,6 +276,38 @@ sys_char = sys2char(sys)  # Returns 'C'
 prn = sat2prn(sat)        # Returns 1
 ```
 
+## SP3 Precise Ephemeris Support
+
+### Accuracy Improvement
+SP3 precise ephemeris provides 40-80x better orbit accuracy compared to broadcast ephemeris:
+- **Broadcast ephemeris**: 1-2 meters orbit accuracy
+- **IGS Final SP3**: 2.5 cm (80x improvement)
+- **IGS Rapid SP3**: 5 cm (40x improvement)
+- **Clock accuracy**: 5-7 ns → 0.1-0.2 ns
+
+### Product Types
+PyINS supports both GPS-only and Multi-GNSS SP3 products:
+
+| Product | Systems | Satellites | Latency | Accuracy |
+|---------|---------|------------|---------|----------|
+| IGS Final | GPS | 32 | 12-18 days | ~2.5 cm |
+| IGS Rapid | GPS | 32 | 17 hours | ~5 cm |
+| COD MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 2-3 days | ~5 cm |
+| GFZ MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 1-2 days | ~5 cm |
+| WUM MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 2-3 days | ~5 cm |
+
+### Default Configuration
+PyINS defaults to MGEX products (COD) for multi-GNSS support. To use GPS-only products:
+```python
+sp3.download_sp3(date, product='igs')  # GPS-only IGS Final
+```
+
+### Interpolation Methods
+- **Neville** (default): RTKLIB-compatible polynomial interpolation
+- **Polyfit**: NumPy polynomial fitting
+- **Lagrange**: SciPy Lagrange interpolation
+- **Cubic Spline**: Smooth spline interpolation
+
 ## Multi-GNSS Considerations
 
 ### BeiDou Time System
@@ -249,6 +321,13 @@ BeiDou uses BDT with a 14-second offset from GPS time, handled automatically by 
 ## API Reference
 
 ### Key Classes
+
+#### SP3Ephemeris
+Precise ephemeris handler with automatic download and interpolation.
+- Downloads from IGS/MGEX FTP servers
+- Supports multiple interpolation methods
+- RTKLIB-compatible Neville interpolation
+- Automatic product selection based on data age
 
 #### TimeCore
 Unified time management for all GNSS systems.

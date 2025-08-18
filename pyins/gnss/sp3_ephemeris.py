@@ -24,7 +24,7 @@ import warnings
 
 from ..core.constants import CLIGHT, SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, SYS_QZS
 from ..core.unified_time import TimeCore, TimeSystem
-from .sp3_downloader import download_sp3_cddis, download_clk_cddis, get_best_sp3_product
+from .sp3_downloader_ftp import download_sp3_ftp, download_clk_ftp, get_best_sp3_product
 from .sp3_interpolation import interpolate_sp3_position, interpolate_sp3_clock
 
 
@@ -45,17 +45,19 @@ class SP3Ephemeris:
         self.sp3_data = {}
         self.clock_data = {}
         
-    def download_sp3(self, date: datetime, product: str = "igs", 
+    def download_sp3(self, date: datetime, product: str = "cod",  # Changed default to MGEX
                      overwrite: bool = False) -> Optional[str]:
         """
-        Download SP3 file using the new HTTPS downloader
+        Download SP3 file using FTP downloader with MGEX priority
         
         Parameters
         ----------
         date : datetime
             Date for which to download SP3 file
         product : str
-            Product type: 'igs' (final), 'igr' (rapid), 'igu' (ultra-rapid)
+            Product type: 'cod', 'gfz', 'wum' (MGEX multi-GNSS), 
+                         'igs', 'igr', 'igu' (GPS-only)
+            Default is 'cod' for multi-GNSS support
         overwrite : bool
             Whether to overwrite existing file
             
@@ -64,19 +66,21 @@ class SP3Ephemeris:
         str or None
             Path to downloaded file or None if failed
         """
-        return download_sp3_cddis(date, product, str(self.cache_dir), overwrite)
+        return download_sp3_ftp(date, product, str(self.cache_dir), overwrite)
         
-    def download_clk(self, date: datetime, product: str = "igs",
+    def download_clk(self, date: datetime, product: str = "cod",  # Changed default to MGEX
                      overwrite: bool = False) -> Optional[str]:
         """
-        Download CLK file using the new HTTPS downloader
+        Download CLK file using FTP downloader with MGEX priority
         
         Parameters
         ----------
         date : datetime
             Date for which to download CLK file
         product : str
-            Product type: 'igs' (final), 'igr' (rapid)
+            Product type: 'cod', 'gfz', 'wum' (MGEX multi-GNSS),
+                         'igs', 'igr' (GPS-only)
+            Default is 'cod' for multi-GNSS support
         overwrite : bool
             Whether to overwrite existing file
             
@@ -85,7 +89,7 @@ class SP3Ephemeris:
         str or None
             Path to downloaded file or None if failed
         """
-        return download_clk_cddis(date, product, str(self.cache_dir), overwrite)
+        return download_clk_ftp(date, product, str(self.cache_dir), overwrite)
         
     def read_sp3(self, filepath: str) -> Dict:
         """

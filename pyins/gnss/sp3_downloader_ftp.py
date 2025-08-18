@@ -76,7 +76,7 @@ def decompress_file(filepath: str, remove_compressed: bool = True) -> bool:
         return False
 
 
-def download_sp3_ftp(date: datetime, product: str = "igs", 
+def download_sp3_ftp(date: datetime, product: str = "cod",  # Changed default to MGEX
                      cache_dir: str = "./sp3_cache",
                      overwrite: bool = False) -> Optional[str]:
     """
@@ -87,7 +87,8 @@ def download_sp3_ftp(date: datetime, product: str = "igs",
     date : datetime
         Date for which to download SP3 file
     product : str
-        Product type: 'igs', 'igr', 'igu', 'cod', 'gfz', 'wum'
+        Product type: 'cod', 'gfz', 'wum' (MGEX), 'igs', 'igr', 'igu' (GPS-only)
+        Default is 'cod' for multi-GNSS support
     cache_dir : str
         Directory to cache downloaded files
     overwrite : bool
@@ -297,33 +298,50 @@ def download_clk_ftp(date: datetime, product: str = "igs",
     return None
 
 
-def get_best_sp3_product(date: datetime, cache_dir: str = "./sp3_cache") -> Optional[str]:
+def get_best_sp3_product(date: datetime, cache_dir: str = "./sp3_cache", prefer_mgex: bool = True) -> Optional[str]:
     """
     Download the best available SP3 product for a given date
     
-    Following gnss_lib_py strategy:
-    - Within 3 days: Try CODE rapid (COD0OPSRAP)
-    - Within 2 weeks: Try GFZ rapid (GFZ0MGXRAP)
-    - Older: Try IGS/CODE/WUM final products
+    Parameters
+    ----------
+    date : datetime
+        Date for which to download SP3
+    cache_dir : str
+        Cache directory for downloads
+    prefer_mgex : bool
+        If True (default), prioritize MGEX products for multi-GNSS support
+    
+    Strategy:
+    - Prioritize MGEX (COD/GFZ/WUM) for multi-GNSS support
+    - Fall back to IGS products if MGEX not available
     """
     now = datetime.now()
     age_days = (now - date).days
     
     print(f"Date: {date}, Age: {age_days} days")
     
-    # Determine product priority based on age
-    if age_days <= 3:
-        # Very recent - try ultra-rapid and rapid products
-        products = ['igu', 'igr', 'gfz', 'cod']
-    elif age_days <= 14:
-        # Recent - try rapid then final
-        products = ['igr', 'gfz', 'cod', 'igs']
-    elif age_days <= 35:
-        # About a month old - rapid should be available
-        products = ['igr', 'igs', 'cod', 'gfz', 'wum']
+    # Determine product priority based on age and MGEX preference
+    if prefer_mgex:
+        # MGEX priority for multi-GNSS support
+        if age_days <= 3:
+            # Very recent - try rapid products
+            products = ['cod', 'gfz', 'wum', 'igr', 'igu']
+        elif age_days <= 14:
+            # Recent - MGEX rapid then final
+            products = ['cod', 'gfz', 'wum', 'igr', 'igs']
+        else:
+            # Older - MGEX final products first
+            products = ['cod', 'wum', 'gfz', 'igs', 'igr']
     else:
-        # Older - try final products
-        products = ['igs', 'cod', 'wum', 'gfz', 'igr']
+        # GPS-only priority (original behavior)
+        if age_days <= 3:
+            products = ['igu', 'igr', 'gfz', 'cod']
+        elif age_days <= 14:
+            products = ['igr', 'gfz', 'cod', 'igs']
+        elif age_days <= 35:
+            products = ['igr', 'igs', 'cod', 'gfz', 'wum']
+        else:
+            products = ['igs', 'cod', 'wum', 'gfz', 'igr']
     
     # Try each product
     for product in products:

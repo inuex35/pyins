@@ -591,9 +591,25 @@ def satpos_sp3(obs, sp3_eph, poly_degree: int = 10, method: str = 'neville'):
 
 def compute_satellite_position(sat_num: int, time: Union[TimeCore, float], 
                               nav_or_sp3, pseudorange: Optional[float] = None,
+                              prefer_mgex: bool = True,
                               **kwargs) -> Tuple[np.ndarray, float, float]:
     """
     Unified function to compute satellite position from either broadcast or SP3 ephemeris
+    
+    Parameters
+    ----------
+    sat_num : int
+        Satellite number
+    time : TimeCore or float
+        Time (GPS seconds or TimeCore object)
+    nav_or_sp3 : dict or SP3Ephemeris
+        Navigation data or SP3 ephemeris object
+    pseudorange : float, optional
+        Pseudorange for signal transmission time calculation
+    prefer_mgex : bool
+        If True and using SP3, prefer MGEX products for multi-GNSS
+    **kwargs
+        Additional arguments for SP3 interpolation
     
     Parameters
     ----------
