@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ephemeris selection and satellite position computation"""
+"""Ephemeris selection and satellite position computation
+
+Supports both RINEX broadcast ephemeris and SP3 precise ephemeris.
+"""
 
 import numpy as np
+from typing import Optional, Tuple, Union
 from ..core.constants import *
 from ..core.data_structures import Ephemeris
 from .beidou_geo_transform import is_beidou_geo_igso, beidou_geo_transform
@@ -388,8 +392,8 @@ def satpos(obs, nav):
     ----------
     obs : list of Observation
         Observation data
-    nav : NavigationData
-        Navigation data
+    nav : NavigationData or SP3Ephemeris
+        Navigation data (broadcast) or SP3 ephemeris handler
         
     Returns
     -------
@@ -402,6 +406,10 @@ def satpos(obs, nav):
     svh : np.ndarray
         Satellite health (n)
     """
+    # Check if SP3 or broadcast ephemeris
+    from .sp3_ephemeris import SP3Ephemeris
+    if isinstance(nav, SP3Ephemeris):
+        return satpos_sp3(obs, nav)
     n = len(obs)
     rs = np.zeros((n, 3))
     dts = np.zeros(n)
@@ -478,3 +486,232 @@ def satpos(obs, nav):
         svh[i] = getattr(eph, 'svh', 0)
         
     return rs, dts, var, svh
+
+
+def satpos_sp3(obs, sp3_eph, poly_degree: int = 10, method: str = 'neville'):
+    """
+    Compute satellite positions using SP3 precise ephemeris
+    
+    Parameters
+    ----------
+    obs : list of Observation
+        Observation data
+    sp3_eph : SP3Ephemeris
+        SP3 ephemeris handler with loaded data
+    poly_degree : int
+        Polynomial degree for interpolation (default 10 for RTKLIB)
+    method : str
+        Interpolation method ('neville', 'polyfit', 'lagrange')
+        
+    Returns
+    -------
+    rs : np.ndarray
+        Satellite positions (n x 3)
+    dts : np.ndarray
+        Satellite clock biases (n)
+    var : np.ndarray
+        Position variances (n)
+    svh : np.ndarray
+        Satellite health (n)
+    """
+    n = len(obs)
+    rs = np.zeros((n, 3))
+    dts = np.zeros(n)
+    var = np.zeros(n)
+    svh = np.zeros(n, dtype=int)
+    
+    for i, ob in enumerate(obs):
+        # Get pseudorange (prefer L1)
+        pr = ob.P[0] if ob.P[0] > 0 else ob.P[1]
+        if pr == 0:
+            svh[i] = -1
+            continue
+            
+        # Get time
+        if hasattr(ob, 'time'):
+            if isinstance(ob.time, TimeCore):
+                time = ob.time
+            else:
+                # Assume GPS seconds
+                time = TimeCore(ob.time)
+        else:
+            svh[i] = -1
+            continue
+            
+        # Calculate transmission time
+        tau = pr / CLIGHT
+        transmit_time = time - tau
+        
+        # Iterate for better accuracy
+        for _ in range(2):
+            # Get satellite position from SP3
+            pos, clk, position_var = sp3_eph.interpolate_position(
+                ob.sat, transmit_time,
+                poly_degree=poly_degree,
+                method=method
+            )
+            
+            if pos is None:
+                svh[i] = -1
+                break
+                
+            # Update transmission time
+            tau = np.linalg.norm(pos) / CLIGHT
+            transmit_time = time - tau
+        
+        if pos is not None:
+            # Earth rotation correction
+            omega_e = 7.2921151467e-5  # Earth rotation rate (rad/s)
+            theta = omega_e * tau
+            
+            # Rotation matrix
+            R = np.array([
+                [np.cos(theta), np.sin(theta), 0],
+                [-np.sin(theta), np.cos(theta), 0],
+                [0, 0, 1]
+            ])
+            
+            # Apply Earth rotation correction
+            rs[i] = R @ pos
+            dts[i] = clk
+            var[i] = position_var
+            svh[i] = 0  # SP3 doesn't have health flags, assume healthy
+            
+            # Sanity check on position
+            radius = np.linalg.norm(rs[i])
+            if radius < 20000e3 or radius > 50000e3:
+                svh[i] = -1
+                rs[i] = np.zeros(3)
+                dts[i] = 0.0
+        else:
+            svh[i] = -1
+    
+    return rs, dts, var, svh
+
+
+def compute_satellite_position(sat_num: int, time: Union[TimeCore, float], 
+                              nav_or_sp3, pseudorange: Optional[float] = None,
+                              **kwargs) -> Tuple[np.ndarray, float, float]:
+    """
+    Unified function to compute satellite position from either broadcast or SP3 ephemeris
+    
+    Parameters
+    ----------
+    sat_num : int
+        Satellite number
+    time : TimeCore or float
+        Time (TimeCore object or GPS seconds)
+    nav_or_sp3 : NavigationData or SP3Ephemeris
+        Navigation data (broadcast) or SP3 ephemeris handler
+    pseudorange : float, optional
+        Pseudorange for transmission time calculation
+    **kwargs : dict
+        Additional arguments for SP3 interpolation (poly_degree, method)
+        
+    Returns
+    -------
+    position : np.ndarray
+        Satellite position [x, y, z] in ECEF meters
+    clock : float
+        Satellite clock correction in seconds
+    variance : float
+        Position variance
+    """
+    from .sp3_ephemeris import SP3Ephemeris
+    
+    # Convert time to TimeCore if needed
+    if not isinstance(time, TimeCore):
+        time = TimeCore(time)
+    
+    # Handle SP3 ephemeris
+    if isinstance(nav_or_sp3, SP3Ephemeris):
+        # Calculate transmission time if pseudorange provided
+        if pseudorange and pseudorange > 0:
+            tau = pseudorange / CLIGHT
+            transmit_time = time - tau
+            
+            # Iterate for better accuracy
+            for _ in range(2):
+                pos, clk, var = nav_or_sp3.interpolate_position(
+                    sat_num, transmit_time,
+                    poly_degree=kwargs.get('poly_degree', 10),
+                    method=kwargs.get('method', 'neville')
+                )
+                if pos is None:
+                    return None, None, None
+                tau = np.linalg.norm(pos) / CLIGHT
+                transmit_time = time - tau
+        else:
+            transmit_time = time
+        
+        # Get position
+        pos, clk, var = nav_or_sp3.interpolate_position(
+            sat_num, transmit_time,
+            poly_degree=kwargs.get('poly_degree', 10),
+            method=kwargs.get('method', 'neville')
+        )
+        
+        # Earth rotation correction if pseudorange provided
+        if pos is not None and pseudorange and pseudorange > 0:
+            omega_e = 7.2921151467e-5
+            theta = omega_e * tau
+            R = np.array([
+                [np.cos(theta), np.sin(theta), 0],
+                [-np.sin(theta), np.cos(theta), 0],
+                [0, 0, 1]
+            ])
+            pos = R @ pos
+        
+        return pos, clk, var
+    
+    # Handle broadcast ephemeris
+    else:
+        gps_seconds = time.get_gps_seconds()
+        
+        # Select ephemeris
+        eph = seleph(nav_or_sp3, gps_seconds, sat_num)
+        if eph is None:
+            return None, None, None
+        
+        # Calculate transmission time if pseudorange provided
+        if pseudorange and pseudorange > 0:
+            tau = pseudorange / CLIGHT
+            transmit_time = gps_seconds - tau
+            
+            # Iterate for better accuracy
+            for _ in range(2):
+                pos, vel, clk = eph2pos(transmit_time, eph)
+                if pos is None:
+                    return None, None, None
+                tau = np.linalg.norm(pos) / CLIGHT
+                transmit_time = gps_seconds - tau
+        else:
+            transmit_time = gps_seconds
+        
+        # Compute position
+        pos, vel, clk = eph2pos(transmit_time, eph)
+        
+        if pos is None:
+            return None, None, None
+        
+        # Earth rotation correction if pseudorange provided
+        if pseudorange and pseudorange > 0:
+            omega_e = 7.2921151467e-5
+            theta = omega_e * tau
+            R = np.array([
+                [np.cos(theta), np.sin(theta), 0],
+                [-np.sin(theta), np.cos(theta), 0],
+                [0, 0, 1]
+            ])
+            pos = R @ pos
+        
+        # Estimate variance from SV accuracy
+        if hasattr(eph, 'sva'):
+            if eph.sva <= 6:
+                var = (2**(1 + eph.sva/2))**2
+            else:
+                var = (2**eph.sva)**2
+        else:
+            var = 4.0**2  # Default 4m
+        
+        return pos, clk, var
