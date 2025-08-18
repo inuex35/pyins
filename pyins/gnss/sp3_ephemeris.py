@@ -117,7 +117,8 @@ class SP3Ephemeris:
                 minute = int(parts[5])
                 second = float(parts[6])
                 
-                current_epoch = datetime(year, month, day, hour, minute, int(second))
+                from datetime import timezone
+                current_epoch = datetime(year, month, day, hour, minute, int(second), tzinfo=timezone.utc)
                 
             elif line[0] == 'P':
                 # Position line
