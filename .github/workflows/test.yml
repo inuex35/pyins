@@ -7,6 +7,12 @@ on:
     branches: [ main, develop, master ]
   workflow_dispatch:  # Allow manual trigger
 
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  issues: write
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -88,12 +94,13 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
 
     - name: Comment test results on PR
-      if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && always()
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
         files: test-results.xml
         check_name: Test Results
         comment_title: Test Results
+        fail_on: nothing
 
   benchmark:
     runs-on: ubuntu-latest
