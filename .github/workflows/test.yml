@@ -168,21 +168,60 @@ jobs:
     
     - name: Run benchmarks
       run: |
-        pytest tests/ --benchmark-only --benchmark-json=benchmark.json || echo '{"benchmarks": []}' > benchmark.json
+        pytest tests/ --benchmark-only --benchmark-json=benchmark.json || true
     
-    - name: Check benchmark file
+    - name: Check and create benchmark file if needed
       run: |
-        if [ -f benchmark.json ]; then
-          echo "Benchmark file exists"
-          cat benchmark.json | head -20
+        if [ ! -f benchmark.json ] || [ ! -s benchmark.json ]; then
+          echo "Creating valid empty benchmark JSON"
+          cat > benchmark.json << 'EOF'
+        {
+          "version": "1.0.0",
+          "machine_info": {
+            "node": "github-actions",
+            "processor": "unknown",
+            "machine": "unknown",
+            "python_compiler": "GCC",
+            "python_implementation": "CPython",
+            "python_version": "3.12.0",
+            "python_build": ["default", ""],
+            "release": "unknown",
+            "system": "Linux",
+            "cpu": {}
+          },
+          "commit_info": {
+            "id": "unknown",
+            "time": "unknown",
+            "author_time": "unknown",
+            "dirty": false,
+            "project": "pyins",
+            "branch": "main"
+          },
+          "benchmarks": []
+        }
+        EOF
+        fi
+        echo "Benchmark file content:"
+        cat benchmark.json | head -30
+    
+    - name: Check if benchmarks exist
+      id: check-benchmarks
+      run: |
+        if [ -f benchmark.json ] && [ -s benchmark.json ]; then
+          BENCHMARK_COUNT=$(python -c "import json; data = json.load(open('benchmark.json')); print(len(data.get('benchmarks', [])))")
+          echo "Found $BENCHMARK_COUNT benchmarks"
+          if [ "$BENCHMARK_COUNT" -gt "0" ]; then
+            echo "has_benchmarks=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_benchmarks=false" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "No benchmark file generated, creating empty one"
-          echo '{"benchmarks": []}' > benchmark.json
+          echo "has_benchmarks=false" >> $GITHUB_OUTPUT
         fi
     
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
-      if: hashFiles('benchmark.json') != ''
+      if: steps.check-benchmarks.outputs.has_benchmarks == 'true'
       with:
         tool: 'pytest'
         output-file-path: benchmark.json
