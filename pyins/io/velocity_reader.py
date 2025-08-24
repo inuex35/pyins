@@ -44,6 +44,7 @@ class VelocityReader:
         self.format = format.lower()
         self.time_format = time_format.lower()
         self.logger = logging.getLogger(__name__)
+        self._data_cache = None  # Cache for loaded data
         
         if not self.file_path.exists():
             raise FileNotFoundError(f"Velocity file not found: {file_path}")
@@ -187,7 +188,11 @@ class VelocityReader:
         np.ndarray or None
             Velocity vector [vx, vy, vz] in m/s, or None if time is out of range
         """
-        df = self.read()
+        # Load data only once (cache it)
+        if self._data_cache is None:
+            self._data_cache = self.read()
+        
+        df = self._data_cache
         
         if gps_time < df['time'].min() or gps_time > df['time'].max():
             return None
