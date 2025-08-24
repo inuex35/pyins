@@ -14,11 +14,13 @@
 
 """Core data structures for GNSS processing"""
 
-import numpy as np
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from .constants import *
 from enum import Enum
+
+import numpy as np
+
+from .constants import *
+
 
 class SensorType(Enum):
     """Sensor type enumeration"""
@@ -42,16 +44,16 @@ class Observation:
     SNR: np.ndarray = field(default_factory=lambda: np.zeros(MAXBAND)) # signal strength (dBHz)
     LLI: np.ndarray = field(default_factory=lambda: np.zeros(MAXBAND, dtype=int)) # loss of lock indicator
     code: np.ndarray = field(default_factory=lambda: np.zeros(MAXBAND, dtype=int)) # code indicator
-    
+
     def __post_init__(self):
         self.system = sat2sys(self.sat)
-    
+
     @property
     def prn(self):
         """Get PRN number from satellite number"""
         from .constants import sat2prn
         return sat2prn(self.sat)
-    
+
     def get_frequency(self, band, glo_fcn=0):
         """Get carrier frequency for given band"""
         if self.system == SYS_GPS:
@@ -68,9 +70,9 @@ class Observation:
             freqs = [FREQ_J1, FREQ_J2, FREQ_J5]
         else:
             return 0.0
-            
+
         return freqs[band] if band < len(freqs) else 0.0
-    
+
     def get_wavelength(self, band, glo_fcn=0):
         """Get carrier wavelength for given band"""
         freq = self.get_frequency(band, glo_fcn)
@@ -88,11 +90,11 @@ class Ephemeris:
     week: int              # GPS week
     code: int              # GPS/GAL: code on L2, BDS: data source
     flag: int              # GPS/GAL: L2 P data flag, BDS: nav type
-    
+
     toe: float             # time of ephemeris (s)
     toc: float             # time of clock (s)
     ttr: float             # transmission time (s)
-    
+
     A: float               # orbit semi-major axis (m)
     e: float               # eccentricity
     i0: float              # inclination angle at ref time (rad)
@@ -102,22 +104,22 @@ class Ephemeris:
     deln: float            # mean motion difference (rad/s)
     OMGd: float            # rate of ascending node (rad/s)
     idot: float            # rate of inclination (rad/s)
-    
+
     crc: float             # radius cosine correction (m)
     crs: float             # radius sine correction (m)
     cuc: float             # latitude cosine correction (rad)
     cus: float             # latitude sine correction (rad)
     cic: float             # inclination cosine correction (rad)
     cis: float             # inclination sine correction (rad)
-    
+
     toes: float            # toe (s) in week
     fit: float             # fit interval (h)
     f0: float              # SV clock offset (s)
     f1: float              # SV clock drift (s/s)
     f2: float              # SV clock drift rate (s/s2)
-    
+
     tgd: np.ndarray = field(default_factory=lambda: np.zeros(4))  # group delay
-    
+
     def __post_init__(self):
         self.system = sat2sys(self.sat)
 
@@ -132,18 +134,18 @@ class GloEphemeris:
     flags: int             # Status flags (bits 7 8:M, bit 6:P4, bit 5:P3, bit 4:P2, bits 2 3:P1, bits 0 1:P)
     sva: int               # satellite accuracy
     age: int               # age of operation
-    
+
     toe: float             # epoch of ephemeris (GPST)
     tof: float             # message frame time (GPST)
-    
+
     pos: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite position (ECEF, m)
     vel: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite velocity (ECEF, m/s)
     acc: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite acceleration (ECEF, m/s^2)
-    
+
     taun: float = 0.0      # SV clock bias (s)
     gamn: float = 0.0      # relative freq bias
     dtaun: float = 0.0     # delay between L1 and L2 (s)
-    
+
     def __post_init__(self):
         self.system = SYS_GLO
 
@@ -151,24 +153,24 @@ class GloEphemeris:
 @dataclass
 class NavigationData:
     """Navigation data container"""
-    eph: List[Ephemeris] = field(default_factory=list)
-    geph: List[GloEphemeris] = field(default_factory=list)  # GLONASS ephemeris
-    peph: List = field(default_factory=list)  # Precise ephemeris
-    pclk: List = field(default_factory=list)  # Precise clock
-    
+    eph: list[Ephemeris] = field(default_factory=list)
+    geph: list[GloEphemeris] = field(default_factory=list)  # GLONASS ephemeris
+    peph: list = field(default_factory=list)  # Precise ephemeris
+    pclk: list = field(default_factory=list)  # Precise clock
+
     ion_gps: np.ndarray = field(default_factory=lambda: np.zeros(8))   # GPS ionosphere parameters
     ion_gal: np.ndarray = field(default_factory=lambda: np.zeros(4))   # Galileo ionosphere parameters
     ion_bds: np.ndarray = field(default_factory=lambda: np.zeros(8))   # BeiDou ionosphere parameters
-    
+
     utc_gps: np.ndarray = field(default_factory=lambda: np.zeros(4))   # GPS UTC parameters
     utc_gal: np.ndarray = field(default_factory=lambda: np.zeros(4))   # Galileo UTC parameters
     utc_bds: np.ndarray = field(default_factory=lambda: np.zeros(4))   # BeiDou UTC parameters
-    
+
     def find_eph(self, sat, time):
         """Find ephemeris for satellite at given time"""
         best_eph = None
         min_dt = float('inf')
-        
+
         for eph in self.eph:
             if eph.sat != sat:
                 continue
@@ -176,14 +178,14 @@ class NavigationData:
             if dt < min_dt:
                 min_dt = dt
                 best_eph = eph
-                
+
         return best_eph
-    
+
     def find_geph(self, sat, time):
         """Find GLONASS ephemeris for satellite at given time"""
         best_geph = None
         min_dt = float('inf')
-        
+
         for geph in self.geph:
             if geph.sat != sat:
                 continue
@@ -191,9 +193,9 @@ class NavigationData:
             if dt < min_dt:
                 min_dt = dt
                 best_geph = geph
-                
+
         return best_geph
-    
+
     def sort_eph(self):
         """Sort ephemerides by satellite number, then by time"""
         self.eph.sort(key=lambda x: (x.sat, x.toe))
@@ -206,22 +208,22 @@ class Solution:
     """Position solution"""
     time: float                    # solution time (GPST)
     type: int = SOLQ_NONE         # solution type
-    
+
     rr: np.ndarray = field(default_factory=lambda: np.zeros(3))      # position (ECEF, m)
     vv: np.ndarray = field(default_factory=lambda: np.zeros(3))      # velocity (ECEF, m/s)
     dtr: np.ndarray = field(default_factory=lambda: np.zeros(6))     # receiver clock bias (s)
-    
+
     qr: np.ndarray = field(default_factory=lambda: np.zeros((6, 6))) # position/velocity covariance
-    
+
     ns: int = 0                    # number of satellites
     age: float = 0.0              # age of differential (s)
     ratio: float = 0.0            # ambiguity ratio factor
-    
+
     def get_llh(self):
         """Get geodetic position (lat, lon, height)"""
         from ..coordinate import ecef2llh
         return ecef2llh(self.rr)
-    
+
     def get_enu_cov(self):
         """Get ENU covariance matrix"""
         from ..coordinate import covecef2enu

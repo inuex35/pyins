@@ -1,6 +1,6 @@
 scipy>=1.5.0
 numba>=0.51.2
-gnsspy
+git+https://github.com/inuex35/gnsspy.git
 numpy>=1.19.0
 pandas>=1.1.0
 matplotlib>=3.3.0

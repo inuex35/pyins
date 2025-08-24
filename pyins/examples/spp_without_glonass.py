@@ -20,11 +20,12 @@ Note: GLONASS is now excluded by default in the SPP implementation.
 """
 
 import numpy as np
-from pyins.io.rinex import RinexObsReader, RinexNavReader
-from pyins.gnss.spp_robust import robust_spp_solve
+
 from pyins.coordinate import ecef2llh
-from pyins.core.constants import sat2sys, SYS_GLO, sys2char
+from pyins.core.constants import SYS_GLO, sat2sys, sys2char
 from pyins.core.unified_time import TimeCore
+from pyins.gnss.spp_robust import robust_spp_solve
+from pyins.io.rinex import RinexNavReader, RinexObsReader
 
 # Read RINEX files
 obs_reader = RinexObsReader("opensky_debug/kaiyodai.obs")
@@ -61,13 +62,13 @@ solution, used_sats = robust_spp_solve(filtered_obs, nav_data, init_pos)
 if solution:
     # Convert to lat/lon/height
     llh = ecef2llh(solution.rr)
-    
-    print(f"\nSolution:")
+
+    print("\nSolution:")
     print(f"  Position: lat={np.rad2deg(llh[0]):.6f}°, lon={np.rad2deg(llh[1]):.6f}°, h={llh[2]:.1f}m")
     print(f"  ECEF: X={solution.rr[0]:.1f}m, Y={solution.rr[1]:.1f}m, Z={solution.rr[2]:.1f}m")
     print(f"  Clock bias: {solution.dtr[0]*1e9:.1f} ns")
     print(f"  Used satellites: {len(used_sats)}")
-    
+
     # Show which systems were used
     systems = {}
     for sat in used_sats:
@@ -76,7 +77,7 @@ if solution:
         if sys_char not in systems:
             systems[sys_char] = 0
         systems[sys_char] += 1
-    
+
     print(f"  Systems: {', '.join([f'{s}:{n}' for s, n in systems.items()])}")
 else:
     print("SPP failed to converge")

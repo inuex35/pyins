@@ -14,27 +14,24 @@
 
 """SP3 precise ephemeris handling with download capability"""
 
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import numpy as np
-from scipy import interpolate
-import warnings
+from typing import Optional
 
-from ..core.constants import CLIGHT, SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, SYS_QZS
-from ..core.unified_time import TimeCore, TimeSystem
-from .sp3_downloader_ftp import download_sp3_ftp, download_clk_ftp, get_best_sp3_product
-from .sp3_interpolation import interpolate_sp3_position, interpolate_sp3_clock
+import numpy as np
+
+from ..core.unified_time import TimeCore
+from .sp3_downloader_ftp import download_clk_ftp, download_sp3_ftp, get_best_sp3_product
+from .sp3_interpolation import interpolate_sp3_clock, interpolate_sp3_position
 
 
 class SP3Ephemeris:
     """SP3 precise ephemeris reader and interpolator with download capability"""
-    
+
     def __init__(self, cache_dir: str = "./sp3_cache"):
         """
         Initialize SP3 ephemeris handler
-        
+
         Parameters
         ----------
         cache_dir : str
@@ -44,35 +41,35 @@ class SP3Ephemeris:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.sp3_data = {}
         self.clock_data = {}
-        
+
     def download_sp3(self, date: datetime, product: str = "cod",  # Changed default to MGEX
                      overwrite: bool = False) -> Optional[str]:
         """
         Download SP3 file using FTP downloader with MGEX priority
-        
+
         Parameters
         ----------
         date : datetime
             Date for which to download SP3 file
         product : str
-            Product type: 'cod', 'gfz', 'wum' (MGEX multi-GNSS), 
+            Product type: 'cod', 'gfz', 'wum' (MGEX multi-GNSS),
                          'igs', 'igr', 'igu' (GPS-only)
             Default is 'cod' for multi-GNSS support
         overwrite : bool
             Whether to overwrite existing file
-            
+
         Returns
         -------
         str or None
             Path to downloaded file or None if failed
         """
         return download_sp3_ftp(date, product, str(self.cache_dir), overwrite)
-        
+
     def download_clk(self, date: datetime, product: str = "cod",  # Changed default to MGEX
                      overwrite: bool = False) -> Optional[str]:
         """
         Download CLK file using FTP downloader with MGEX priority
-        
+
         Parameters
         ----------
         date : datetime
@@ -83,35 +80,35 @@ class SP3Ephemeris:
             Default is 'cod' for multi-GNSS support
         overwrite : bool
             Whether to overwrite existing file
-            
+
         Returns
         -------
         str or None
             Path to downloaded file or None if failed
         """
         return download_clk_ftp(date, product, str(self.cache_dir), overwrite)
-        
-    def read_sp3(self, filepath: str) -> Dict:
+
+    def read_sp3(self, filepath: str) -> dict:
         """
         Read SP3 file
-        
+
         Parameters
         ----------
         filepath : str
             Path to SP3 file
-            
+
         Returns
         -------
         dict
             Dictionary with satellite data
         """
         sp3_data = {}
-        
-        with open(filepath, 'r') as f:
+
+        with open(filepath) as f:
             lines = f.readlines()
-            
+
         current_epoch = None
-        
+
         for line in lines:
             if line[0] == '*':
                 # Epoch line
@@ -122,19 +119,19 @@ class SP3Ephemeris:
                 hour = int(parts[4])
                 minute = int(parts[5])
                 second = float(parts[6])
-                
+
                 from datetime import timezone
                 current_epoch = datetime(year, month, day, hour, minute, int(second), tzinfo=timezone.utc)
-                
+
             elif line[0] == 'P':
                 # Position line
                 parts = line.split()
                 sat_id = parts[0][1:]  # Remove 'P' prefix
-                
+
                 # Parse satellite system and PRN
                 sys_char = sat_id[0]
                 prn = int(sat_id[1:])
-                
+
                 # Convert to satellite number
                 if sys_char == 'G':
                     sat_num = prn
@@ -148,39 +145,39 @@ class SP3Ephemeris:
                     sat_num = prn + 400
                 else:
                     continue
-                    
+
                 # Parse position (km) and clock (microseconds)
                 x = float(parts[1]) * 1000  # Convert to meters
                 y = float(parts[2]) * 1000
                 z = float(parts[3]) * 1000
                 clock = float(parts[4]) * 1e-6  # Convert to seconds
-                
+
                 if sat_num not in sp3_data:
                     sp3_data[sat_num] = {
                         'epochs': [],
                         'positions': [],
                         'clocks': []
                     }
-                    
+
                 sp3_data[sat_num]['epochs'].append(current_epoch)
                 sp3_data[sat_num]['positions'].append([x, y, z])
                 sp3_data[sat_num]['clocks'].append(clock)
-                
+
         # Convert lists to numpy arrays
         for sat_num in sp3_data:
             sp3_data[sat_num]['epochs'] = np.array(sp3_data[sat_num]['epochs'])
             sp3_data[sat_num]['positions'] = np.array(sp3_data[sat_num]['positions'])
             sp3_data[sat_num]['clocks'] = np.array(sp3_data[sat_num]['clocks'])
-            
+
         return sp3_data
-        
-    def interpolate_position(self, sat_num: int, time: TimeCore, 
-                           poly_degree: int = 10, method: str = 'neville') -> Tuple[np.ndarray, float, float]:
+
+    def interpolate_position(self, sat_num: int, time: TimeCore,
+                           poly_degree: int = 10, method: str = 'neville') -> tuple[np.ndarray, float, float]:
         """
         Interpolate satellite position and clock at given time
-        
+
         Uses RTKLIB/GNSSpy compatible interpolation methods.
-        
+
         Parameters
         ----------
         sat_num : int
@@ -191,7 +188,7 @@ class SP3Ephemeris:
             Polynomial degree for interpolation (default 10 for RTKLIB compatibility)
         method : str
             Interpolation method: 'neville' (RTKLIB), 'polyfit' (GNSSpy), 'lagrange'
-            
+
         Returns
         -------
         position : np.ndarray
@@ -203,60 +200,60 @@ class SP3Ephemeris:
         """
         if sat_num not in self.sp3_data:
             return None, None, None
-            
+
         sat_data = self.sp3_data[sat_num]
-        
+
         # Convert time to datetime for comparison
         target_dt = time.get_datetime()
-        
+
         # Find epochs for interpolation
         epochs = sat_data['epochs']
         positions = sat_data['positions']
         clocks = sat_data['clocks']
-        
+
         # Convert epochs to seconds from first epoch
         time_seconds = np.array([(ep - epochs[0]).total_seconds() for ep in epochs])
         target_seconds = (target_dt - epochs[0]).total_seconds()
-        
+
         # Check if target time is within range
         if target_seconds < time_seconds[0] or target_seconds > time_seconds[-1]:
             print(f"Warning: Time {target_dt} is outside SP3 data range for satellite {sat_num}")
             return None, None, None
-        
+
         # Use the new interpolation methods
         position, pos_success = interpolate_sp3_position(
-            time_seconds, positions, target_seconds, 
+            time_seconds, positions, target_seconds,
             method=method, degree=poly_degree
         )
-        
+
         if not pos_success:
             return None, None, None
-        
+
         # Interpolate clock (linear interpolation is standard)
         clock, clk_success = interpolate_sp3_clock(
             time_seconds, clocks, target_seconds, method='linear'
         )
-        
+
         if not clk_success:
             clock = 0.0  # Default if clock interpolation fails
-        
+
         # Estimate variance based on interpolation method and degree
         # For RTKLIB compatibility with degree 10: ~1cm accuracy
-        # For GNSSpy with degree 16: ~2.5cm accuracy  
+        # For GNSSpy with degree 16: ~2.5cm accuracy
         if method == 'neville' and poly_degree == 10:
             variance = 0.01  # 1 cm (RTKLIB standard)
         elif method == 'polyfit' and poly_degree >= 16:
             variance = 0.025  # 2.5 cm (GNSSpy with high degree)
         else:
             variance = 0.05  # 5 cm (conservative estimate)
-        
+
         return position, clock, variance
-        
+
     def load_sp3_for_time(self, time: TimeCore, product: str = "igs",
                          download: bool = True) -> bool:
         """
         Load SP3 data for the given time
-        
+
         Parameters
         ----------
         time : TimeCore
@@ -265,7 +262,7 @@ class SP3Ephemeris:
             Product type: 'igs', 'igr', 'igu'
         download : bool
             Whether to download if not available locally
-            
+
         Returns
         -------
         bool
@@ -273,25 +270,25 @@ class SP3Ephemeris:
         """
         # Get date from time
         dt = time.get_datetime()
-        
+
         # Check if we need files from adjacent days
         dates_needed = [dt.date()]
         if dt.hour < 3:
             dates_needed.append((dt - timedelta(days=1)).date())
         if dt.hour > 21:
             dates_needed.append((dt + timedelta(days=1)).date())
-            
+
         sp3_files = []
         for date in dates_needed:
             # Check local cache first
             date_dt = datetime.combine(date, datetime.min.time())
-            
+
             # Try to find existing file
             gps_epoch = datetime(1980, 1, 6)
             delta = date_dt - gps_epoch
             gps_week = delta.days // 7
             gps_dow = delta.days % 7
-            
+
             if product == "igs":
                 filename = f"igs{gps_week:04d}{gps_dow:01d}.sp3"
             elif product == "igr":
@@ -299,9 +296,9 @@ class SP3Ephemeris:
             elif product == "igu":
                 hour = (dt.hour // 6) * 6
                 filename = f"igu{gps_week:04d}{gps_dow:01d}_{hour:02d}.sp3"
-                
+
             filepath = self.cache_dir / filename
-            
+
             if not filepath.exists() and download:
                 # Download if not available - use best available product
                 filepath = get_best_sp3_product(date_dt, str(self.cache_dir))
@@ -310,19 +307,19 @@ class SP3Ephemeris:
                     continue
                 else:
                     filepath = Path(filepath)
-                    
+
             if filepath and Path(filepath).exists():
                 sp3_files.append(str(filepath))
-                
+
         if not sp3_files:
             print("No SP3 files available")
             return False
-            
+
         # Read and merge SP3 data
         all_sp3_data = {}
         for filepath in sp3_files:
             sp3_data = self.read_sp3(filepath)
-            
+
             # Merge data
             for sat_num, data in sp3_data.items():
                 if sat_num not in all_sp3_data:
@@ -334,33 +331,33 @@ class SP3Ephemeris:
                 all_sp3_data[sat_num]['epochs'].extend(data['epochs'])
                 all_sp3_data[sat_num]['positions'].extend(data['positions'])
                 all_sp3_data[sat_num]['clocks'].extend(data['clocks'])
-                
+
         # Sort and convert to arrays
         for sat_num in all_sp3_data:
             # Sort by epoch
             epochs = np.array(all_sp3_data[sat_num]['epochs'])
             positions = np.array(all_sp3_data[sat_num]['positions'])
             clocks = np.array(all_sp3_data[sat_num]['clocks'])
-            
+
             sort_idx = np.argsort(epochs)
             all_sp3_data[sat_num]['epochs'] = epochs[sort_idx]
             all_sp3_data[sat_num]['positions'] = positions[sort_idx]
             all_sp3_data[sat_num]['clocks'] = clocks[sort_idx]
-            
+
         self.sp3_data = all_sp3_data
         return True
-        
-    def get_satellite_position(self, sat_num: int, time: TimeCore) -> Tuple[np.ndarray, float, float]:
+
+    def get_satellite_position(self, sat_num: int, time: TimeCore) -> tuple[np.ndarray, float, float]:
         """
         Get satellite position and clock at given time
-        
+
         Parameters
         ----------
         sat_num : int
             Satellite number
         time : TimeCore
             Time for position
-            
+
         Returns
         -------
         position : np.ndarray
@@ -374,5 +371,5 @@ class SP3Ephemeris:
         if not self.sp3_data:
             if not self.load_sp3_for_time(time):
                 return None, None, None
-                
+
         return self.interpolate_position(sat_num, time)

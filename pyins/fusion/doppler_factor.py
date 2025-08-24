@@ -19,26 +19,28 @@ The Doppler measurement provides direct velocity information which is particular
 useful for constraining velocity states in GNSS/INS integration.
 """
 
-import numpy as np
-from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
-from ..core.constants import CLIGHT
-from ..core.data_structures import Observation, Ephemeris
-from ..satellite.satellite_position import compute_satellite_position, compute_satellite_velocity
+from typing import Optional
+
+import numpy as np
+
 from ..coordinate.transforms import ecef2enu, ecef2llh
+from ..core.constants import CLIGHT
+from ..core.data_structures import Ephemeris, Observation
+from ..satellite.satellite_position import compute_satellite_position, compute_satellite_velocity
 from ..sensors.lever_arm import skew_symmetric
-from .state import NavigationState
 from .graph_optimizer import Factor
+from .state import NavigationState
 
 
 @dataclass
 class DopplerFactor(Factor):
     """
     Doppler measurement factor for factor graph optimization
-    
+
     The Doppler shift is related to the relative velocity between satellite and receiver:
     doppler = -f/c * (v_sat - v_rcv) · e_sr
-    
+
     where:
     - f is the carrier frequency
     - c is speed of light
@@ -50,16 +52,16 @@ class DopplerFactor(Factor):
     ephemeris: Ephemeris
     frequency: float  # Carrier frequency (Hz)
     lever_arm: Optional[np.ndarray] = None  # Lever arm from IMU to antenna (body frame)
-    
+
     def compute_residual(self, state: NavigationState) -> float:
         """
         Compute Doppler measurement residual
-        
+
         Parameters
         ----------
         state : NavigationState
             Current navigation state containing position, velocity, attitude
-            
+
         Returns
         -------
         residual : float
@@ -72,7 +74,7 @@ class DopplerFactor(Factor):
         sat_vel, sat_clk_drift = compute_satellite_velocity(
             self.ephemeris, self.observation.time
         )
-        
+
         # Get receiver antenna position and velocity
         if self.lever_arm is not None:
             # Apply lever arm compensation
@@ -82,32 +84,32 @@ class DopplerFactor(Factor):
         else:
             antenna_pos = state.position
             antenna_vel = state.velocity
-        
+
         # Compute range and line-of-sight vector
         range_vec = sat_pos - antenna_pos
         range_norm = np.linalg.norm(range_vec)
         los_unit = range_vec / range_norm  # Unit vector from receiver to satellite
-        
+
         # Relative velocity along line-of-sight
         rel_velocity = sat_vel - antenna_vel
         radial_velocity = np.dot(rel_velocity, los_unit)
-        
+
         # Predicted Doppler (negative sign convention)
         predicted_doppler = -self.frequency / CLIGHT * radial_velocity
-        
+
         # Add satellite clock drift effect
         predicted_doppler += self.frequency * sat_clk_drift
-        
+
         # Residual = measured - predicted
         measured_doppler = self.observation.D[0]  # Assuming first frequency
         residual = measured_doppler - predicted_doppler
-        
+
         return residual
-    
-    def compute_jacobian(self, state: NavigationState) -> Dict[str, np.ndarray]:
+
+    def compute_jacobian(self, state: NavigationState) -> dict[str, np.ndarray]:
         """
         Compute Jacobian of Doppler measurement with respect to state
-        
+
         Returns
         -------
         jacobians : dict
@@ -120,7 +122,7 @@ class DopplerFactor(Factor):
         sat_vel, _ = compute_satellite_velocity(
             self.ephemeris, self.observation.time
         )
-        
+
         # Get receiver antenna position and velocity
         if self.lever_arm is not None:
             antenna_pos = state.position + state.dcm @ self.lever_arm
@@ -129,25 +131,25 @@ class DopplerFactor(Factor):
         else:
             antenna_pos = state.position
             antenna_vel = state.velocity
-            
+
         # Compute range and line-of-sight
         range_vec = sat_pos - antenna_pos
         range_norm = np.linalg.norm(range_vec)
         los_unit = range_vec / range_norm
-        
+
         # Relative velocity
         rel_velocity = sat_vel - antenna_vel
-        
+
         # Jacobian w.r.t position (through line-of-sight change)
         I = np.eye(3)
         los_outer = np.outer(los_unit, los_unit)
         d_los_d_pos = (I - los_outer) / range_norm
-        
+
         H_pos = self.frequency / CLIGHT * rel_velocity @ d_los_d_pos
-        
+
         # Jacobian w.r.t velocity (direct contribution)
         H_vel = self.frequency / CLIGHT * los_unit
-        
+
         # Jacobian w.r.t attitude (if lever arm exists)
         H_att = np.zeros(3)
         if self.lever_arm is not None:
@@ -156,10 +158,10 @@ class DopplerFactor(Factor):
             H_att = self.frequency / CLIGHT * los_unit @ state.dcm @ skew_symmetric(
                 np.cross(omega_body, self.lever_arm)
             )
-            
+
             # Also affects antenna position
             H_att += self.frequency / CLIGHT * rel_velocity @ d_los_d_pos @ state.dcm @ skew_symmetric(self.lever_arm)
-        
+
         return {
             'position': H_pos,
             'velocity': H_vel,
@@ -170,30 +172,30 @@ class DopplerFactor(Factor):
 class DopplerMeasurementModel:
     """
     Doppler measurement model for multiple satellites
-    
+
     This class handles the computation of Doppler measurements for
     multiple satellites simultaneously, including proper weighting.
     """
-    
+
     def __init__(self, lever_arm: Optional[np.ndarray] = None):
         """
         Initialize Doppler measurement model
-        
+
         Parameters
         ----------
         lever_arm : np.ndarray, optional
             Lever arm from IMU to antenna in body frame [x, y, z] (m)
         """
         self.lever_arm = lever_arm
-    
+
     def compute_doppler_residuals(self,
                                  observations: list,
                                  ephemerides: dict,
                                  state: NavigationState,
-                                 frequencies: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                 frequencies: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute Doppler residuals for multiple satellites
-        
+
         Parameters
         ----------
         observations : list
@@ -204,7 +206,7 @@ class DopplerMeasurementModel:
             Current navigation state
         frequencies : dict
             Dictionary mapping (sat, band) to frequency in Hz
-            
+
         Returns
         -------
         residuals : np.ndarray
@@ -217,18 +219,18 @@ class DopplerMeasurementModel:
         residuals = []
         jacobians = []
         variances = []
-        
+
         for obs in observations:
             if obs.sat not in ephemerides:
                 continue
-                
+
             # Get frequency for this satellite and band
             freq_key = (obs.sat, 0)  # Assuming first band
             if freq_key not in frequencies:
                 continue
-                
+
             frequency = frequencies[freq_key]
-            
+
             # Create Doppler factor
             factor = DopplerFactor(
                 node_ids=[0],  # Single state node
@@ -240,40 +242,40 @@ class DopplerMeasurementModel:
                 frequency=frequency,
                 lever_arm=self.lever_arm
             )
-            
+
             # Compute residual
             res = factor.compute_residual(state)
             residuals.append(res)
-            
+
             # Compute Jacobian
             jac = factor.compute_jacobian(state)
-            
+
             # Stack Jacobian components [position, velocity, attitude]
             H_row = np.hstack([jac['position'], jac['velocity'], jac['attitude']])
             jacobians.append(H_row)
-            
+
             # Estimate measurement variance based on SNR and elevation
-            variance = self._estimate_doppler_variance(obs, state.position, 
+            variance = self._estimate_doppler_variance(obs, state.position,
                                                       ephemerides[obs.sat])
             variances.append(variance)
-        
+
         if not residuals:
             return np.array([]), np.array([[]]), np.array([[]])
-            
+
         # Stack results
         residuals = np.array(residuals)
         H = np.vstack(jacobians)
         R = np.diag(variances)
-        
+
         return residuals, H, R
-    
-    def _estimate_doppler_variance(self, 
+
+    def _estimate_doppler_variance(self,
                                   obs: Observation,
                                   rcv_pos: np.ndarray,
                                   eph: Ephemeris) -> float:
         """
         Estimate Doppler measurement variance
-        
+
         Parameters
         ----------
         obs : Observation
@@ -282,7 +284,7 @@ class DopplerMeasurementModel:
             Receiver position (ECEF)
         eph : Ephemeris
             Satellite ephemeris
-            
+
         Returns
         -------
         variance : float
@@ -290,24 +292,24 @@ class DopplerMeasurementModel:
         """
         # Base standard deviation (Hz)
         sigma_base = 0.1  # 0.1 Hz base uncertainty
-        
+
         # SNR-based scaling
         snr = obs.SNR[0] if obs.SNR[0] > 0 else 30.0  # Default 30 dB-Hz
         snr_factor = 10 ** ((45 - snr) / 20)  # Better SNR -> lower noise
-        
+
         # Elevation-based scaling
         sat_pos, _, _ = compute_satellite_position(eph, obs.time)
-        range_vec = sat_pos - rcv_pos
-        
+        sat_pos - rcv_pos
+
         # Convert to local coordinates for elevation
         llh = ecef2llh(rcv_pos)
         range_enu = ecef2enu(sat_pos, llh)
         elevation = np.arctan2(range_enu[2], np.linalg.norm(range_enu[:2]))
-        
+
         # Low elevation -> higher noise
         elev_factor = 1.0 / np.sin(max(elevation, np.radians(5)))
-        
+
         # Combined variance
         sigma = sigma_base * snr_factor * elev_factor
-        
+
         return sigma ** 2

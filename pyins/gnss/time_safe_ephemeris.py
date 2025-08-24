@@ -14,29 +14,31 @@
 
 """Time-safe ephemeris functions using GNSSTime class"""
 
+from typing import Optional, Union
+
 import numpy as np
-from typing import Union, Tuple, Optional, List
+
 from ..core.constants import *
-from ..core.data_structures import Ephemeris, GloEphemeris, Observation, NavigationData
+from ..core.data_structures import Ephemeris, GloEphemeris, NavigationData, Observation
 from ..core.time import GNSSTime, gnss_time_diff
-from .ephemeris import seleph as _seleph, eph2clk as _eph2clk, eph2pos as _eph2pos
-from ..satellite.satellite_position import (
-    compute_satellite_position as _compute_satellite_position,
-    compute_glonass_position as _compute_glonass_position
-)
+from ..satellite.satellite_position import compute_glonass_position as _compute_glonass_position
+from ..satellite.satellite_position import compute_satellite_position as _compute_satellite_position
+from .ephemeris import eph2clk as _eph2clk
+from .ephemeris import eph2pos as _eph2pos
+from .ephemeris import seleph as _seleph
 
 
-def timediff_safe(t1: Union[GNSSTime, float], t2: Union[GNSSTime, float], 
+def timediff_safe(t1: Union[GNSSTime, float], t2: Union[GNSSTime, float],
                   time_sys: str = 'GPS') -> float:
     """Time difference with type safety
-    
+
     Parameters
     ----------
     t1, t2 : GNSSTime or float
         Times to compare
     time_sys : str
         Time system for float values
-        
+
     Returns
     -------
     float
@@ -47,7 +49,7 @@ def timediff_safe(t1: Union[GNSSTime, float], t2: Union[GNSSTime, float],
 
 def seleph_safe(nav: NavigationData, t: GNSSTime, sat: int) -> Optional[Union[Ephemeris, GloEphemeris]]:
     """Select ephemeris with GNSSTime
-    
+
     Parameters
     ----------
     nav : NavigationData
@@ -56,7 +58,7 @@ def seleph_safe(nav: NavigationData, t: GNSSTime, sat: int) -> Optional[Union[Ep
         Time of interest
     sat : int
         Satellite number
-        
+
     Returns
     -------
     Ephemeris or GloEphemeris or None
@@ -69,14 +71,14 @@ def seleph_safe(nav: NavigationData, t: GNSSTime, sat: int) -> Optional[Union[Ep
 
 def eph2clk_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> float:
     """Compute satellite clock with GNSSTime
-    
+
     Parameters
     ----------
     t : GNSSTime
         Time of interest
     eph : Ephemeris or GloEphemeris
         Ephemeris data
-        
+
     Returns
     -------
     float
@@ -84,7 +86,7 @@ def eph2clk_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> float:
     """
     # Get system
     sys = sat2sys(eph.sat)
-    
+
     # Convert time to appropriate system
     if sys == SYS_BDS:
         # BeiDou uses BDT
@@ -98,21 +100,21 @@ def eph2clk_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> float:
     else:
         # GPS/QZSS use GPS time
         t_sys = t.convert_to('GPS')
-    
+
     # Use TOW for computation
     return _eph2clk(t_sys.tow, eph)
 
 
-def eph2pos_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> Tuple[np.ndarray, float, float]:
+def eph2pos_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> tuple[np.ndarray, float, float]:
     """Compute satellite position with GNSSTime
-    
+
     Parameters
     ----------
     t : GNSSTime
         Time of interest
     eph : Ephemeris or GloEphemeris
         Ephemeris data
-        
+
     Returns
     -------
     rs : np.ndarray
@@ -124,7 +126,7 @@ def eph2pos_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> Tuple[np.n
     """
     # Get system
     sys = sat2sys(eph.sat)
-    
+
     # Convert time to appropriate system
     if sys == SYS_BDS:
         t_sys = t.convert_to('BDS')
@@ -134,21 +136,21 @@ def eph2pos_safe(t: GNSSTime, eph: Union[Ephemeris, GloEphemeris]) -> Tuple[np.n
         t_sys = t.convert_to('GAL')
     else:
         t_sys = t.convert_to('GPS')
-    
+
     # Use TOW for computation
     return _eph2pos(t_sys.tow, eph)
 
 
-def compute_satellite_position_safe(eph: Ephemeris, t: GNSSTime) -> Tuple[np.ndarray, float, np.ndarray]:
+def compute_satellite_position_safe(eph: Ephemeris, t: GNSSTime) -> tuple[np.ndarray, float, np.ndarray]:
     """Compute satellite position with GNSSTime
-    
+
     Parameters
     ----------
     eph : Ephemeris
         Broadcast ephemeris
     t : GNSSTime
         Signal transmission time
-        
+
     Returns
     -------
     rs : np.ndarray
@@ -160,28 +162,28 @@ def compute_satellite_position_safe(eph: Ephemeris, t: GNSSTime) -> Tuple[np.nda
     """
     # Get system and convert time
     sys = sat2sys(eph.sat)
-    
+
     if sys == SYS_BDS:
         t_sys = t.convert_to('BDS')
     elif sys == SYS_GAL:
         t_sys = t.convert_to('GAL')
     else:
         t_sys = t.convert_to('GPS')
-    
+
     # Use float for legacy function
     return _compute_satellite_position(eph, t_sys.tow)
 
 
-def compute_glonass_position_safe(geph: GloEphemeris, t: GNSSTime) -> Tuple[np.ndarray, float, float]:
+def compute_glonass_position_safe(geph: GloEphemeris, t: GNSSTime) -> tuple[np.ndarray, float, float]:
     """Compute GLONASS satellite position with GNSSTime
-    
+
     Parameters
     ----------
     geph : GloEphemeris
         GLONASS broadcast ephemeris
     t : GNSSTime
         Signal transmission time
-        
+
     Returns
     -------
     rs : np.ndarray
@@ -193,21 +195,21 @@ def compute_glonass_position_safe(geph: GloEphemeris, t: GNSSTime) -> Tuple[np.n
     """
     # Convert to GLONASS time
     t_glo = t.convert_to('GLO')
-    
+
     # Use TOW for legacy function
     return _compute_glonass_position(geph, t_glo.tow)
 
 
-def satpos_safe(obs: List[Observation], nav: NavigationData) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def satpos_safe(obs: list[Observation], nav: NavigationData) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute satellite positions with GNSSTime
-    
+
     Parameters
     ----------
     obs : list of Observation
         Observation data
     nav : NavigationData
         Navigation data
-        
+
     Returns
     -------
     rs : np.ndarray
@@ -224,14 +226,14 @@ def satpos_safe(obs: List[Observation], nav: NavigationData) -> Tuple[np.ndarray
     dts = np.zeros(n)
     var = np.zeros(n)
     svh = np.zeros(n, dtype=int)
-    
+
     for i, ob in enumerate(obs):
         # Get pseudorange (prefer L1)
         pr = ob.P[0] if ob.P[0] > 0 else ob.P[1]
         if pr == 0:
             svh[i] = -1
             continue
-        
+
         # Convert observation time to GNSSTime if needed
         if isinstance(ob.time, (int, float)):
             # Assume GPS time
@@ -241,24 +243,24 @@ def satpos_safe(obs: List[Observation], nav: NavigationData) -> Tuple[np.ndarray
                 t_rx = GNSSTime(0, ob.time, 'GPS')
         else:
             t_rx = ob.time
-            
+
         # Signal transmission time
         t_tx = t_rx - (pr / CLIGHT)
-        
+
         # Select ephemeris
         eph = seleph_safe(nav, t_tx, ob.sat)
         if eph is None:
             svh[i] = -1
             continue
-            
+
         # Satellite clock correction
         dt_sat = eph2clk_safe(t_tx, eph)
-        
+
         # Corrected transmission time
         t_tx_corrected = t_tx - dt_sat
-        
+
         # Satellite position at transmission time
         rs[i], var[i], dts[i] = eph2pos_safe(t_tx_corrected, eph)
         svh[i] = getattr(eph, 'svh', 0)
-        
+
     return rs, dts, var, svh

@@ -25,7 +25,7 @@ requirements = [
     "pandas>=1.1.0",
     "matplotlib>=3.3.0",
     "numba>=0.51.2",
-    "gnsspy",
+    "gnsspy @ git+https://github.com/inuex35/gnsspy.git",
 ]
 
 setup(

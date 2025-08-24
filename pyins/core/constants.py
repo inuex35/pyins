@@ -87,7 +87,7 @@ J2 = 1.082627E-3               # J2 coefficient
 
 # System-specific gravitational constants
 MU_GPS = 3.9860050E14          # GPS gravitational constant
-MU_GAL = 3.986004418E14        # Galileo gravitational constant  
+MU_GAL = 3.986004418E14        # Galileo gravitational constant
 MU_GLO = 3.9860044E14          # GLONASS gravitational constant
 MU_BDS = 3.986004418E14        # BeiDou gravitational constant
 
@@ -155,24 +155,24 @@ SYS_NONE = 0x00
 # Satellite system functions
 def sat2sys(sat):
     """Get satellite system from satellite number
-    
+
     Uses unified satellite numbering from satellite_numbering.py
     """
     from .satellite_numbering import SATELLITE_RANGES
-    
+
     if sat <= 0 or sat > 255:
         return SYS_NONE
-    
+
     for sys_id, ranges in SATELLITE_RANGES.items():
         for start, end in ranges:
             if start <= sat <= end:
                 return sys_id
-    
+
     return SYS_NONE
 
 def sat2prn(sat):
     """Get PRN number from satellite number
-    
+
     Uses unified satellite numbering from satellite_numbering.py
     """
     from .satellite_numbering import sat_to_prn
@@ -180,28 +180,28 @@ def sat2prn(sat):
 
 def prn2sat(prn, sys):
     """Get satellite number from PRN and system
-    
+
     Uses unified satellite numbering from satellite_numbering.py
-    
+
     Parameters:
     -----------
     prn : int
         PRN number
     sys : int
         Satellite system (SYS_GPS, SYS_GLO, etc.)
-        
+
     Returns:
     --------
     int
         Satellite number
     """
-    from .satellite_numbering import prn_to_sat, SYS_TO_CHAR
-    
+    from .satellite_numbering import SYS_TO_CHAR, prn_to_sat
+
     # Get system character
     sys_char = SYS_TO_CHAR.get(sys, None)
     if sys_char is None:
         return 0
-    
+
     return prn_to_sat(sys_char, prn)
 
 def sys2char(sys):

@@ -14,17 +14,18 @@
 
 """BeiDou satellite utilities"""
 
-from ..core.constants import sat2prn, SYS_BDS, sat2sys
+from ..core.constants import SYS_BDS, sat2prn, sat2sys
+
 
 def get_beidou_orbit_type(sat):
     """
     Determine BeiDou satellite orbit type from satellite number
-    
+
     Parameters
     ----------
     sat : int
         Satellite number
-        
+
     Returns
     -------
     str
@@ -32,14 +33,14 @@ def get_beidou_orbit_type(sat):
     """
     if sat2sys(sat) != SYS_BDS:
         return None
-        
+
     prn = sat2prn(sat)
-    
+
     # BeiDou-2 and BeiDou-3 classification
     # GEO: C01-C05, C59-C63 (Geostationary Earth Orbit)
     # IGSO: C06-C18, C31-C40, C56-C58 (Inclined Geosynchronous Orbit)
     # MEO: C19-C30, C41-C46 (Medium Earth Orbit)
-    
+
     if prn <= 5 or (59 <= prn <= 63):
         return 'GEO'
     elif (6 <= prn <= 18) or (31 <= prn <= 40) or (56 <= prn <= 58):
@@ -54,12 +55,12 @@ def get_beidou_orbit_type(sat):
 def get_expected_range(orbit_type):
     """
     Get expected range for different orbit types
-    
+
     Parameters
     ----------
     orbit_type : str
         'GEO', 'IGSO', or 'MEO'
-        
+
     Returns
     -------
     tuple
@@ -100,15 +101,15 @@ def is_beidou_meo(sat):
 def needs_special_transformation(sat):
     """
     Check if BeiDou satellite needs special coordinate transformation
-    
+
     GEO and IGSO satellites need special handling due to their
     orbit characteristics and the BeiDou coordinate system
-    
+
     Parameters
     ----------
     sat : int
         Satellite number
-        
+
     Returns
     -------
     bool
