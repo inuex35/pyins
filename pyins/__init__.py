@@ -25,10 +25,10 @@ __author__ = "PyINS Development Team"
 __title__ = "pyins"
 __description__ = "Comprehensive GNSS/INS processing library"
 
-from .core import *
-from .satellite import *
-from .observation import *
-from .coordinate import *
-from .attitude import *
+from .attitude import *  # noqa: F403
+from .coordinate import *  # noqa: F403
+from .core import *  # noqa: F403
+from .observation import *  # noqa: F403
+from .satellite import *  # noqa: F403
+from .utils import *  # noqa: F403
 # from .plot import *  # Temporarily disabled due to missing planar dependency
-from .utils import *

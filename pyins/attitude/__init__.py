@@ -21,7 +21,7 @@ This module provides functions for converting between different attitude represe
 - Quaternions
 - Skew symmetric matrices
 
-All rotations assume right-hand coordinate frames with euler angles in the order 
+All rotations assume right-hand coordinate frames with euler angles in the order
 'roll-pitch-yaw' and DCMs with the order of 'ZYX'.
 
 References:
@@ -29,11 +29,11 @@ References:
     - (2013) Paul D. Groves
 """
 
-from .skew import skew, deskew
 from .dcm import dcm2euler, dcm2quat
 from .euler import euler2dcm, euler2quat, rot_x, rot_y, rot_z
-from .quaternion import quat2euler, quat2dcm
-from .wrap import wrapTo2Pi, wrapToPi, wrapEulerAngles
+from .quaternion import quat2dcm, quat2euler
+from .skew import deskew, skew
+from .wrap import wrapEulerAngles, wrapTo2Pi, wrapToPi
 
 __all__ = [
     'skew', 'deskew',
