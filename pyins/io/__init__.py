@@ -14,11 +14,17 @@
 
 """I/O module for pyins - handles RINEX and other file formats"""
 
-from .rinex import RinexObsReader, RinexNavReader
-from .imu_reader import IMUReader, IMUPreprocessor, load_imu_data, preprocess_imu_data, sync_gnss_imu
+from .imu_reader import (
+    IMUPreprocessor,
+    IMUReader,
+    load_imu_data,
+    preprocess_imu_data,
+    sync_gnss_imu,
+)
+from .rinex import RinexNavReader, RinexObsReader
 
 __all__ = [
     'RinexObsReader', 'RinexNavReader',
-    'IMUReader', 'IMUPreprocessor', 
+    'IMUReader', 'IMUPreprocessor',
     'load_imu_data', 'preprocess_imu_data', 'sync_gnss_imu'
 ]

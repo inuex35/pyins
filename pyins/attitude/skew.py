@@ -16,7 +16,7 @@
 Attitude skew symmetric form utilities.
 
 This module provides functions for converting between vectors and their skew symmetric forms.
-All rotations assume right-hand coordinate frames with euler angles in the order 
+All rotations assume right-hand coordinate frames with euler angles in the order
 'roll-pitch-yaw' and DCMs with the order of 'ZYX'.
 
 References:
@@ -35,25 +35,25 @@ from numba import njit
 def skew(v):
     """
     Convert vector into its skew symmetric form.
-    
+
     The skew symmetric matrix of a vector v = [v1, v2, v3] is:
     [  0  -v3   v2 ]
     [ v3    0  -v1 ]
     [-v2   v1    0 ]
-    
+
     Parameters
     ----------
     v : array_like, shape (3,)
         Input vector
-        
+
     Returns
     -------
     M : ndarray, shape (3, 3)
         Skew symmetric form of input vector
     """
-    M = np.array([[  0.0, -v[2],  v[1]], 
-                  [ v[2],   0.0, -v[0]], 
-                  [-v[1],  v[0],   0.0]], 
+    M = np.array([[  0.0, -v[2],  v[1]],
+                  [ v[2],   0.0, -v[0]],
+                  [-v[1],  v[0],   0.0]],
                  dtype=np.double)
     return M
 
@@ -62,15 +62,15 @@ def skew(v):
 def deskew(M):
     """
     Convert skew symmetric form into its respective vector.
-    
+
     Extracts the vector v from a skew symmetric matrix M where:
     v1 = M[2,1], v2 = M[0,2], v3 = M[1,0]
-    
+
     Parameters
     ----------
     M : array_like, shape (3, 3)
         Skew symmetric form of vector
-        
+
     Returns
     -------
     v : ndarray, shape (3,)

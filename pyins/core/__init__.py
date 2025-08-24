@@ -13,5 +13,5 @@
 # limitations under the License.
 
 from .constants import *
-from .time import *
 from .data_structures import *
+from .time import *

@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .state import *
+from .doppler_factor import *
 from .ekf import *
 from .graph_optimizer import *
-from .doppler_factor import *
 from .pseudorange_factor import *
+from .state import *

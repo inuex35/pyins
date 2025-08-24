@@ -14,8 +14,8 @@
 
 """GNSS processing module"""
 
-from .spp import spp_solve
-from .satellite_positions import compute_satellite_info
 from .double_difference import form_double_differences
+from .satellite_positions import compute_satellite_info
+from .spp import spp_solve
 
 __all__ = ['spp_solve', 'compute_satellite_info', 'form_double_differences']

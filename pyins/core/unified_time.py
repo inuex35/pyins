@@ -22,11 +22,10 @@ This module provides TimeCore - a central time class that can handle various tim
 - Other GNSS time systems (BDS, GAL, GLO)
 """
 
-import numpy as np
-from datetime import datetime, timezone, timedelta
-from typing import Union, Optional, Tuple, Dict
-from enum import Enum
 import warnings
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Optional, Union
 
 
 class TimeFormat(Enum):
@@ -117,12 +116,12 @@ SECONDS_PER_DAY = 86400
 
 def get_leap_seconds_at_date(dt: datetime) -> int:
     """Get leap seconds (TAI-UTC) at a given date
-    
+
     Parameters
     ----------
     dt : datetime
         Date to get leap seconds for
-        
+
     Returns
     -------
     int
@@ -130,61 +129,61 @@ def get_leap_seconds_at_date(dt: datetime) -> int:
     """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    
+
     leap_seconds = 0
     for leap_date, seconds in LEAP_SECONDS_HISTORY:
         if dt >= leap_date:
             leap_seconds = seconds
         else:
             break
-    
+
     return leap_seconds
 
 
 class TimeCore:
     """Unified time representation for all GNSS and time systems
-    
+
     This class internally stores time as GPS seconds and provides
     conversions to all other formats.
     """
-    
+
     def __init__(self, gps_seconds: float):
         """Initialize with GPS seconds
-        
+
         Parameters
         ----------
         gps_seconds : float
             Time in GPS seconds since GPS epoch (1980-01-06 00:00:00 UTC)
         """
         self._gps_seconds = float(gps_seconds)
-        
+
     @classmethod
     def from_gps(cls, week: int, tow: float) -> 'TimeCore':
         """Create from GPS week and time of week
-        
+
         Parameters
         ----------
         week : int
             GPS week number
         tow : float
             Time of week in seconds [0, 604800)
-            
+
         Returns
         -------
         TimeCore
             Time instance
         """
         return cls(week * SECONDS_PER_WEEK + tow)
-    
+
     @classmethod
     def from_unix(cls, unix_time: float) -> 'TimeCore':
         """Create from Unix timestamp
-        
+
         Parameters
         ----------
         unix_time : float
             Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
-            
+
         Returns
         -------
         TimeCore
@@ -196,38 +195,38 @@ class TimeCore:
         # Add leap seconds (Unix doesn't include them, GPS does)
         gps_seconds = gps_offset + LEAP_SECONDS
         return cls(gps_seconds)
-    
+
     @classmethod
     def from_datetime(cls, dt: datetime) -> 'TimeCore':
         """Create from datetime object
-        
+
         Parameters
         ----------
         dt : datetime
             Datetime object (should be UTC)
-            
+
         Returns
         -------
         TimeCore
             Time instance
         """
         if dt.tzinfo is None:
-            warnings.warn("Datetime has no timezone, assuming UTC")
+            warnings.warn("Datetime has no timezone, assuming UTC", stacklevel=2)
             dt = dt.replace(tzinfo=timezone.utc)
-        
+
         # Convert to Unix first, then to GPS
         unix_time = dt.timestamp()
         return cls.from_unix(unix_time)
-    
+
     @classmethod
     def from_mjd(cls, mjd: float) -> 'TimeCore':
         """Create from Modified Julian Day
-        
+
         Parameters
         ----------
         mjd : float
             Modified Julian Day
-            
+
         Returns
         -------
         TimeCore
@@ -236,23 +235,23 @@ class TimeCore:
         # Convert MJD to datetime
         dt = MJD_EPOCH + timedelta(days=mjd)
         return cls.from_datetime(dt)
-    
+
     @classmethod
     def from_bds(cls, week: int, tow: float) -> 'TimeCore':
         """Create from BeiDou week and time of week
-        
+
         BeiDou Time (BDT) started on 2006-01-01 00:00:00 UTC.
         At that time, there were 33 leap seconds (TAI-UTC).
         GPS Time started when there were 19 leap seconds.
         The offset between GPS and BDT is thus 33 - 19 = 14 seconds.
-        
+
         Parameters
         ----------
         week : int
             BeiDou week number
         tow : float
             Time of week in seconds
-            
+
         Returns
         -------
         TimeCore
@@ -261,25 +260,25 @@ class TimeCore:
         # Convert BDS to GPS using the leap second difference
         bds_seconds = week * SECONDS_PER_WEEK + tow
         # BDT = GPS - GPS_BDS_OFFSET, so GPS = BDT + GPS_BDS_OFFSET
-        gps_seconds_from_bds_epoch = bds_seconds + GPS_BDS_OFFSET
-        
+        bds_seconds + GPS_BDS_OFFSET
+
         # Calculate total GPS seconds
         bds_epoch_in_gps = (BDS_EPOCH - GPS_EPOCH).total_seconds()
         gps_seconds = bds_epoch_in_gps + bds_seconds + GPS_BDS_OFFSET
-        
+
         return cls(gps_seconds)
-    
+
     @classmethod
     def from_gal(cls, week: int, tow: float) -> 'TimeCore':
         """Create from Galileo week and time of week
-        
+
         Parameters
         ----------
         week : int
             Galileo week number
         tow : float
             Time of week in seconds
-            
+
         Returns
         -------
         TimeCore
@@ -287,26 +286,26 @@ class TimeCore:
         """
         # Galileo is aligned with GPS
         return cls.from_gps(week, tow)
-    
+
     @classmethod
-    def from_auto(cls, time_value: Union[float, Tuple[int, float], datetime], 
+    def from_auto(cls, time_value: Union[float, tuple[int, float], datetime],
                   hint: Optional[TimeFormat] = None) -> 'TimeCore':
         """Create from automatic detection of time format
-        
+
         Parameters
         ----------
         time_value : float, tuple, or datetime
             Time value in unknown format
         hint : TimeFormat, optional
             Hint about the time format
-            
+
         Returns
         -------
         TimeCore
             Time instance
         """
         detected_format = hint if hint else cls.detect_time_format(time_value)
-        
+
         if detected_format == TimeFormat.GPS_WEEK_TOW:
             return cls.from_gps(time_value[0], time_value[1])
         elif detected_format == TimeFormat.GPS_SECONDS:
@@ -321,16 +320,16 @@ class TimeCore:
             return cls.from_bds(time_value[0], time_value[1])
         else:
             raise ValueError(f"Cannot create time from format: {detected_format}")
-    
+
     @staticmethod
-    def detect_time_format(time_value: Union[float, Tuple[int, float], datetime]) -> TimeFormat:
+    def detect_time_format(time_value: Union[float, tuple[int, float], datetime]) -> TimeFormat:
         """Detect the format of a time value
-        
+
         Parameters
         ----------
         time_value : float, tuple, or datetime
             Time value to analyze
-            
+
         Returns
         -------
         TimeFormat
@@ -338,32 +337,32 @@ class TimeCore:
         """
         if isinstance(time_value, datetime):
             return TimeFormat.UTC
-        
+
         if isinstance(time_value, tuple) and len(time_value) == 2:
             week, tow = time_value
             if 0 <= tow < SECONDS_PER_WEEK:
                 # Could be GPS, BDS, or GAL week+tow
                 # Default to GPS without additional context
                 return TimeFormat.GPS_WEEK_TOW
-        
+
         if isinstance(time_value, (int, float)):
             time_value = float(time_value)
-            
+
             # MJD range: ~40000 to ~70000 (1858 to 2050)
             if 40000 <= time_value <= 70000:
                 return TimeFormat.MJD
-            
+
             # TOW: 0 to 604800
             if 0 <= time_value < SECONDS_PER_WEEK:
                 # Ambiguous - could be TOW or very early Unix time
                 # Without context, assume TOW
-                warnings.warn("Ambiguous time value - assuming TOW")
+                warnings.warn("Ambiguous time value - assuming TOW", stacklevel=2)
                 return TimeFormat.UNKNOWN
-            
+
             # Unix timestamp: ~0 (1970) to ~2e9 (2033)
             if 0 <= time_value <= 2e9:
                 return TimeFormat.UNIX
-            
+
             # GPS seconds: > 604800 (after first week)
             if time_value > SECONDS_PER_WEEK:
                 # Could be GPS seconds or future Unix timestamp
@@ -373,12 +372,12 @@ class TimeCore:
                     return TimeFormat.GPS_SECONDS
                 else:
                     return TimeFormat.UNIX
-        
+
         return TimeFormat.UNKNOWN
-    
-    def get_gps_week_tow(self) -> Tuple[int, float]:
+
+    def get_gps_week_tow(self) -> tuple[int, float]:
         """Get GPS week and time of week
-        
+
         Returns
         -------
         tuple
@@ -387,20 +386,20 @@ class TimeCore:
         week = int(self._gps_seconds // SECONDS_PER_WEEK)
         tow = self._gps_seconds % SECONDS_PER_WEEK
         return week, tow
-    
+
     def get_gps_seconds(self) -> float:
         """Get GPS seconds since GPS epoch
-        
+
         Returns
         -------
         float
             GPS seconds
         """
         return self._gps_seconds
-    
+
     def get_unix(self) -> float:
         """Get Unix timestamp
-        
+
         Returns
         -------
         float
@@ -409,15 +408,15 @@ class TimeCore:
         # GPS to UTC datetime
         gps_dt = GPS_EPOCH + timedelta(seconds=self._gps_seconds - LEAP_SECONDS)
         return gps_dt.timestamp()
-    
+
     def get_datetime(self, tz=timezone.utc) -> datetime:
         """Get datetime object
-        
+
         Parameters
         ----------
         tz : timezone, optional
             Timezone for the datetime (default: UTC)
-            
+
         Returns
         -------
         datetime
@@ -425,10 +424,10 @@ class TimeCore:
         """
         unix_time = self.get_unix()
         return datetime.fromtimestamp(unix_time, tz=tz)
-    
+
     def get_mjd(self) -> float:
         """Get Modified Julian Day
-        
+
         Returns
         -------
         float
@@ -437,13 +436,13 @@ class TimeCore:
         dt = self.get_datetime()
         delta = dt - MJD_EPOCH
         return delta.total_seconds() / SECONDS_PER_DAY
-    
-    def get_bds_week_tow(self) -> Tuple[int, float]:
+
+    def get_bds_week_tow(self) -> tuple[int, float]:
         """Get BeiDou week and time of week
-        
+
         BDT = GPS - GPS_BDS_OFFSET, where the offset comes from
         the leap second difference between the two epoch times.
-        
+
         Returns
         -------
         tuple
@@ -452,11 +451,11 @@ class TimeCore:
         # Convert GPS seconds to BDS seconds
         # GPS to BDS: subtract the leap second offset
         bds_seconds_from_gps = self._gps_seconds - GPS_BDS_OFFSET
-        
+
         # Calculate offset from BDS epoch
         bds_epoch_in_gps = (BDS_EPOCH - GPS_EPOCH).total_seconds()
         bds_seconds = bds_seconds_from_gps - bds_epoch_in_gps
-        
+
         # Handle negative values (before BDS epoch)
         if bds_seconds < 0:
             week = 0
@@ -464,12 +463,12 @@ class TimeCore:
         else:
             week = int(bds_seconds // SECONDS_PER_WEEK)
             tow = bds_seconds % SECONDS_PER_WEEK
-        
+
         return week, tow
-    
+
     def get_bds_seconds(self) -> float:
         """Get BeiDou seconds since BDS epoch
-        
+
         Returns
         -------
         float
@@ -477,10 +476,10 @@ class TimeCore:
         """
         week, tow = self.get_bds_week_tow()
         return week * SECONDS_PER_WEEK + tow
-    
-    def get_gal_week_tow(self) -> Tuple[int, float]:
+
+    def get_gal_week_tow(self) -> tuple[int, float]:
         """Get Galileo week and time of week
-        
+
         Returns
         -------
         tuple
@@ -488,13 +487,13 @@ class TimeCore:
         """
         # Galileo is aligned with GPS
         return self.get_gps_week_tow()
-    
-    def get_glo_time(self) -> Tuple[int, float]:
+
+    def get_glo_time(self) -> tuple[int, float]:
         """Get GLONASS time (UTC + 3 hours)
-        
+
         GLONASS time follows UTC with 3-hour offset (Moscow time).
         Unlike GPS/BDS, GLONASS includes leap seconds.
-        
+
         Returns
         -------
         tuple
@@ -503,25 +502,25 @@ class TimeCore:
         # GPS to UTC (subtract leap seconds)
         utc_seconds = self._gps_seconds - LEAP_SECONDS
         utc_dt = GPS_EPOCH + timedelta(seconds=utc_seconds)
-        
+
         # Add 3 hours for GLONASS (Moscow time)
         glo_dt = utc_dt + timedelta(hours=3)
-        
+
         # GLONASS uses day number within 4-year period
         glo_epoch = datetime(1996, 1, 1, tzinfo=timezone.utc)
         days_since_epoch = (glo_dt - glo_epoch).days
         day_in_4year = days_since_epoch % (4 * 365 + 1)
-        
+
         # Seconds of day in GLONASS time
         seconds_of_day = glo_dt.hour * 3600 + glo_dt.minute * 60 + glo_dt.second + glo_dt.microsecond / 1e6
-        
+
         return day_in_4year, seconds_of_day
-    
+
     def get_glo_seconds(self) -> float:
         """Get GLONASS seconds (GPS - leap seconds)
-        
+
         GLONASS follows UTC, so we subtract leap seconds from GPS time.
-        
+
         Returns
         -------
         float
@@ -530,15 +529,15 @@ class TimeCore:
         # For ephemeris calculations, use GPS - leap_seconds
         # The +3 hours is only for display/conversion purposes
         return self._gps_seconds - GPS_GLO_OFFSET
-    
+
     def get_tow(self, system: TimeSystem = TimeSystem.GPS) -> float:
         """Get time of week for specified system
-        
+
         Parameters
         ----------
         system : TimeSystem
             Time system (GPS, BDS, GAL, etc.)
-            
+
         Returns
         -------
         float
@@ -556,70 +555,70 @@ class TimeCore:
             return tow - GPS_GLO_OFFSET
         else:
             raise ValueError(f"TOW not available for system: {system}")
-        
+
         return tow
-    
+
     def add_seconds(self, seconds: float) -> 'TimeCore':
         """Add seconds to time
-        
+
         Parameters
         ----------
         seconds : float
             Seconds to add
-            
+
         Returns
         -------
         TimeCore
             New time instance
         """
         return TimeCore(self._gps_seconds + seconds)
-    
+
     def __add__(self, seconds: float) -> 'TimeCore':
         """Add seconds using + operator"""
         return self.add_seconds(seconds)
-    
+
     def __sub__(self, other: Union['TimeCore', float]) -> Union[float, 'TimeCore']:
         """Subtract time or seconds"""
         if isinstance(other, TimeCore):
             return self._gps_seconds - other._gps_seconds
         else:
             return self.add_seconds(-other)
-    
+
     def __lt__(self, other: 'TimeCore') -> bool:
         """Less than comparison"""
         return self._gps_seconds < other._gps_seconds
-    
+
     def __le__(self, other: 'TimeCore') -> bool:
         """Less than or equal comparison"""
         return self._gps_seconds <= other._gps_seconds
-    
+
     def __gt__(self, other: 'TimeCore') -> bool:
         """Greater than comparison"""
         return self._gps_seconds > other._gps_seconds
-    
+
     def __ge__(self, other: 'TimeCore') -> bool:
         """Greater than or equal comparison"""
         return self._gps_seconds >= other._gps_seconds
-    
+
     def __eq__(self, other: 'TimeCore') -> bool:
         """Equality comparison"""
         if not isinstance(other, TimeCore):
             return False
         return abs(self._gps_seconds - other._gps_seconds) < 1e-9
-    
+
     def __str__(self) -> str:
         """String representation"""
         week, tow = self.get_gps_week_tow()
         dt = self.get_datetime()
         return f"GPS({week}, {tow:.3f}) = {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC"
-    
+
     def __repr__(self) -> str:
         """Detailed representation"""
         return f"TimeCore(gps_seconds={self._gps_seconds})"
-    
-    def to_dict(self) -> Dict[str, Union[float, Tuple[int, float], str]]:
+
+    def to_dict(self) -> dict[str, Union[float, tuple[int, float], str]]:
         """Convert to dictionary with all time formats
-        
+
         Returns
         -------
         dict
@@ -627,7 +626,7 @@ class TimeCore:
         """
         gps_week, gps_tow = self.get_gps_week_tow()
         bds_week, bds_tow = self.get_bds_week_tow()
-        
+
         return {
             'gps_seconds': self._gps_seconds,
             'gps_week_tow': (gps_week, gps_tow),
@@ -640,14 +639,14 @@ class TimeCore:
 
 
 # Convenience functions
-def detect_time_format(time_value: Union[float, Tuple[int, float], datetime]) -> TimeFormat:
+def detect_time_format(time_value: Union[float, tuple[int, float], datetime]) -> TimeFormat:
     """Detect the format of a time value
-    
+
     Parameters
     ----------
     time_value : float, tuple, or datetime
         Time value to analyze
-        
+
     Returns
     -------
     TimeFormat
@@ -658,7 +657,7 @@ def detect_time_format(time_value: Union[float, Tuple[int, float], datetime]) ->
 
 def current_time() -> TimeCore:
     """Get current time
-    
+
     Returns
     -------
     TimeCore
@@ -669,12 +668,12 @@ def current_time() -> TimeCore:
 
 def is_gps_time(time_value: float) -> bool:
     """Check if a float value is likely GPS time (not TOW)
-    
+
     Parameters
     ----------
     time_value : float
         Time value to check
-        
+
     Returns
     -------
     bool
@@ -686,12 +685,12 @@ def is_gps_time(time_value: float) -> bool:
 
 def is_unix_time(time_value: float) -> bool:
     """Check if a float value is likely Unix timestamp
-    
+
     Parameters
     ----------
     time_value : float
         Time value to check
-        
+
     Returns
     -------
     bool
@@ -701,11 +700,11 @@ def is_unix_time(time_value: float) -> bool:
     return fmt == TimeFormat.UNIX
 
 
-def convert_time(time_value: Union[float, Tuple[int, float], datetime],
+def convert_time(time_value: Union[float, tuple[int, float], datetime],
                  from_format: Optional[TimeFormat] = None,
-                 to_format: TimeFormat = TimeFormat.GPS_SECONDS) -> Union[float, Tuple[int, float]]:
+                 to_format: TimeFormat = TimeFormat.GPS_SECONDS) -> Union[float, tuple[int, float]]:
     """Convert between time formats
-    
+
     Parameters
     ----------
     time_value : float, tuple, or datetime
@@ -714,7 +713,7 @@ def convert_time(time_value: Union[float, Tuple[int, float], datetime],
         Source format (auto-detected if not provided)
     to_format : TimeFormat
         Target format
-        
+
     Returns
     -------
     float or tuple
@@ -722,7 +721,7 @@ def convert_time(time_value: Union[float, Tuple[int, float], datetime],
     """
     # Create TimeCore
     unified = TimeCore.from_auto(time_value, hint=from_format)
-    
+
     # Convert to target format
     if to_format == TimeFormat.GPS_SECONDS:
         return unified.get_gps_seconds()
