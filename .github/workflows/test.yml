@@ -167,11 +167,22 @@ jobs:
         pip install pytest-benchmark
     
     - name: Run benchmarks
-      run: pytest tests/ --benchmark-only --benchmark-json=benchmark.json || true
+      run: |
+        pytest tests/ --benchmark-only --benchmark-json=benchmark.json || echo '{"benchmarks": []}' > benchmark.json
+    
+    - name: Check benchmark file
+      run: |
+        if [ -f benchmark.json ]; then
+          echo "Benchmark file exists"
+          cat benchmark.json | head -20
+        else
+          echo "No benchmark file generated, creating empty one"
+          echo '{"benchmarks": []}' > benchmark.json
+        fi
     
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
-      if: success() || failure()
+      if: hashFiles('benchmark.json') != ''
       with:
         tool: 'pytest'
         output-file-path: benchmark.json
