@@ -39,36 +39,58 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
-    - name: Install dependencies
+    - name: Install dependencies (Unix/Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+        pip install pytest pytest-cov pytest-xdist pytest-timeout
+    
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
         pip install pytest pytest-cov pytest-xdist pytest-timeout
 
-    - name: Lint with ruff
+    - name: Lint with ruff (Unix/Linux/macOS)
+      if: runner.os != 'Windows'
       run: |
         pip install ruff
         # Run linting but don't fail the build
         ruff check pyins tests --output-format=github || true
         # Check formatting but don't fail the build
         ruff format --check pyins tests || true
+    
+    - name: Lint with ruff (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        pip install ruff
+        ruff check pyins tests --output-format=github || echo "Linting completed with warnings"
+        ruff format --check pyins tests || echo "Format check completed with warnings"
 
-    - name: Type check with mypy
+    - name: Type check with mypy (Unix/Linux/macOS)
+      if: runner.os != 'Windows'
       run: |
         pip install mypy types-requests
         mypy pyins --ignore-missing-imports --no-strict-optional || true
-
-    - name: Run tests with pytest
+    
+    - name: Type check with mypy (Windows)
+      if: runner.os == 'Windows'
       run: |
-        pytest tests/ \
-          --verbose \
-          --cov=pyins \
-          --cov-report=term-missing \
-          --cov-report=xml \
-          --cov-report=html \
-          --junit-xml=test-results.xml \
-          --timeout=300 \
-          -n auto
+        pip install mypy types-requests
+        mypy pyins --ignore-missing-imports --no-strict-optional || echo "Type check completed with warnings"
+
+    - name: Run tests with pytest (Unix/Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        pytest tests/ --verbose --cov=pyins --cov-report=term-missing --cov-report=xml --cov-report=html --junit-xml=test-results.xml --timeout=300 -n auto
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+    
+    - name: Run tests with pytest (Windows)
+      if: runner.os == 'Windows'
+      run: pytest tests/ --verbose --cov=pyins --cov-report=term-missing --cov-report=xml --cov-report=html --junit-xml=test-results.xml --timeout=300 -n auto
       env:
         PYTHONPATH: ${{ github.workspace }}
 
@@ -93,13 +115,22 @@ jobs:
         verbose: true
         token: ${{ secrets.CODECOV_TOKEN }}
 
-    - name: Comment test results on PR
+    - name: Comment test results on PR (Linux)
       if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && always()
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
         files: test-results.xml
         check_name: Test Results
         comment_title: Test Results
+        fail_on: nothing
+    
+    - name: Comment test results on PR (Windows/macOS)
+      if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest' && matrix.python-version == '3.12' && always()
+      uses: EnricoMi/publish-unit-test-result-action/windows@v2
+      with:
+        files: test-results.xml
+        check_name: Test Results (${{ matrix.os }})
+        comment_title: Test Results (${{ matrix.os }})
         fail_on: nothing
 
   benchmark:
@@ -123,8 +154,7 @@ jobs:
         pip install pytest-benchmark
     
     - name: Run benchmarks
-      run: |
-        pytest tests/ --benchmark-only --benchmark-json=benchmark.json || true
+      run: pytest tests/ --benchmark-only --benchmark-json=benchmark.json || true
     
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
@@ -156,8 +186,7 @@ jobs:
         pip install bandit[toml] safety
     
     - name: Security check with bandit
-      run: |
-        bandit -r pyins -f json -o bandit-report.json || true
+      run: bandit -r pyins -f json -o bandit-report.json || true
     
     - name: Check for known vulnerabilities
       run: |
