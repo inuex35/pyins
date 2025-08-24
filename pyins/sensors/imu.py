@@ -78,7 +78,6 @@ class IMUBias:
         return IMUData(
             timestamp=imu_data.timestamp,
             sensor_id=imu_data.sensor_id,
-            sensor_type=imu_data.sensor_type,
             data=corrected_data,
             covariance=imu_data.covariance,
             metadata=imu_data.metadata

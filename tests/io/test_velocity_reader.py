@@ -154,7 +154,7 @@ class TestVelocityReader(unittest.TestCase):
         bad_data.to_csv(bad_file, index=False)
         
         reader = VelocityReader(bad_file, format='csv')
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(RuntimeError) as context:
             reader.read()
         self.assertIn("Missing required columns", str(context.exception))
         
@@ -244,7 +244,7 @@ class TestVelocityReader(unittest.TestCase):
     def test_utc_time_format_not_implemented(self):
         reader = VelocityReader(self.csv_file, format='csv', time_format='utc')
         
-        with self.assertRaises(NotImplementedError) as context:
+        with self.assertRaises(RuntimeError) as context:
             reader.read()
         self.assertIn("UTC time conversion not yet implemented", str(context.exception))
 

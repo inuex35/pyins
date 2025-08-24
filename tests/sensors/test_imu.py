@@ -102,12 +102,13 @@ class TestIMUConfig(unittest.TestCase):
     def test_init_with_defaults(self):
         config = IMUConfig(
             sensor_id="imu_0",
-            update_rate=100.0
+            sensor_type=SensorType.IMU,
+            sampling_rate=100.0
         )
         
         self.assertEqual(config.sensor_type, SensorType.IMU)
         self.assertEqual(config.sensor_id, "imu_0")
-        self.assertEqual(config.update_rate, 100.0)
+        self.assertEqual(config.sampling_rate, 100.0)
         
         # Check default noise parameters
         self.assertEqual(config.noise_params["acc_noise"], 0.01)
@@ -125,7 +126,8 @@ class TestIMUConfig(unittest.TestCase):
         
         config = IMUConfig(
             sensor_id="imu_0",
-            update_rate=200.0,
+            sensor_type=SensorType.IMU,
+            sampling_rate=200.0,
             noise_params=custom_noise
         )
         
@@ -143,7 +145,8 @@ class TestIMUConfig(unittest.TestCase):
         
         config = IMUConfig(
             sensor_id="imu_0",
-            update_rate=100.0,
+            sensor_type=SensorType.IMU,
+            sampling_rate=100.0,
             noise_params=partial_noise
         )
         
@@ -373,7 +376,8 @@ class TestIMUIntegration(unittest.TestCase):
         # Create IMU configuration
         config = IMUConfig(
             sensor_id="imu_0",
-            update_rate=100.0,
+            sensor_type=SensorType.IMU,
+            sampling_rate=100.0,
             noise_params={
                 "acc_noise": 0.02,
                 "gyro_noise": 0.002
