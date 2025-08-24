@@ -1,13 +1,13 @@
 version: 2
 updates:
-  # Enable version updates for Python dependencies
+  # Python dependencies - security and major updates only
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
       time: "04:00"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     reviewers:
       - "inuex35"
     labels:
@@ -16,15 +16,28 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # Only allow important updates
+    allow:
+      - dependency-type: "direct"     # Direct dependencies only
+      - dependency-type: "production"  # Production dependencies only
+    ignore:
+      # Ignore patch and minor updates (only allow major and security)
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch", "version-update:semver-minor"]
+    # Group updates to reduce PR count
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
     
-  # Enable version updates for GitHub Actions
+  # GitHub Actions - security and major updates only
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
       day: "monday"
       time: "04:00"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     reviewers:
       - "inuex35"
     labels:
@@ -33,3 +46,13 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    # Only allow important updates
+    ignore:
+      # Ignore patch and minor updates
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch", "version-update:semver-minor"]
+    # Group all action updates into one PR
+    groups:
+      github-actions:
+        patterns:
+          - "*"
