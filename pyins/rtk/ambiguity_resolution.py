@@ -96,7 +96,9 @@ class AmbiguityResolver:
                 return None, ratio, False
                 
         except Exception as e:
+            import traceback
             print(f"Ambiguity resolution failed: {e}")
+            # Return failure instead of raising
             return None, 0.0, False
             
     def _estimate_success_rate(self, 

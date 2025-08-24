@@ -359,3 +359,91 @@ def enu2lla(enu: np.ndarray, lla0: np.ndarray) -> np.ndarray:
     """
     xyz = enu2ecef(enu, lla0)
     return ecef2llh(xyz)
+
+
+def enu2ned(enu: np.ndarray) -> np.ndarray:
+    """
+    Convert ENU to NED coordinates
+    
+    Parameters:
+    -----------
+    enu : np.ndarray
+        ENU coordinates [e, n, u] (m)
+        
+    Returns:
+    --------
+    ned : np.ndarray
+        NED coordinates [n, e, d] (m)
+    """
+    return np.array([enu[1], enu[0], -enu[2]])
+
+
+def ned2enu(ned: np.ndarray) -> np.ndarray:
+    """
+    Convert NED to ENU coordinates
+    
+    Parameters:
+    -----------
+    ned : np.ndarray
+        NED coordinates [n, e, d] (m)
+        
+    Returns:
+    --------
+    enu : np.ndarray
+        ENU coordinates [e, n, u] (m)
+    """
+    return np.array([ned[1], ned[0], -ned[2]])
+
+
+def compute_rotation_matrix_enu(llh: np.ndarray) -> np.ndarray:
+    """
+    Compute rotation matrix from ECEF to ENU
+    
+    Parameters:
+    -----------
+    llh : np.ndarray
+        Geodetic coordinates [lat, lon, height] (rad, rad, m)
+        
+    Returns:
+    --------
+    R : np.ndarray
+        Rotation matrix (3x3)
+    """
+    lat, lon = llh[0], llh[1]
+    sin_lat = np.sin(lat)
+    cos_lat = np.cos(lat)
+    sin_lon = np.sin(lon)
+    cos_lon = np.cos(lon)
+    
+    return np.array([
+        [-sin_lon, cos_lon, 0],
+        [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
+        [cos_lat * cos_lon, cos_lat * sin_lon, sin_lat]
+    ])
+
+
+def compute_rotation_matrix_ned(llh: np.ndarray) -> np.ndarray:
+    """
+    Compute rotation matrix from ECEF to NED
+    
+    Parameters:
+    -----------
+    llh : np.ndarray
+        Geodetic coordinates [lat, lon, height] (rad, rad, m)
+        
+    Returns:
+    --------
+    R : np.ndarray
+        Rotation matrix (3x3)
+    """
+    lat, lon = llh[0], llh[1]
+    sin_lat = np.sin(lat)
+    cos_lat = np.cos(lat)
+    sin_lon = np.sin(lon)
+    cos_lon = np.cos(lon)
+    
+    return np.array([
+        [-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat],
+        [-sin_lon, cos_lon, 0],
+        [-cos_lat * cos_lon, -cos_lat * sin_lon, -sin_lat]
+    ])

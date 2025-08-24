@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class IMUReader:
     """IMU data reader for various file formats"""
     
-    def __init__(self, file_path: str, format: str = 'csv'):
+    def __init__(self, file_path: str, format: str = 'csv', time_system: str = 'gps'):
         """
         Initialize IMU reader
         
@@ -39,32 +39,85 @@ class IMUReader:
             Path to IMU data file
         format : str
             File format ('csv', 'txt', 'binary')
+        time_system : str
+            Time system of the input file ('unix', 'gps')
+            - 'unix': Input is in UNIX time
+            - 'gps': Input is in GPS time (default)
         """
         self.file_path = Path(file_path)
         self.format = format.lower()
+        self.input_time_system = time_system
         self.logger = logging.getLogger(__name__)
+        
+        # GPS to UNIX time offset
+        self.GPS_TO_UNIX_OFFSET = 315964800  # GPS epoch: January 6, 1980
+        self.LEAP_SECONDS_2015 = 17  # Leap seconds as of 2015
         
         if not self.file_path.exists():
             raise FileNotFoundError(f"IMU file not found: {file_path}")
     
-    def read(self, start_time: Optional[float] = None, duration: Optional[float] = None) -> pd.DataFrame:
+    def read(self, start_time: Optional[float] = None, duration: Optional[float] = None,
+             output_time_system: str = 'same') -> pd.DataFrame:
         """
-        Read IMU data from file
+        Read IMU data from file with time system conversion
         
         Parameters:
         -----------
         start_time : float, optional
-            Start time (Unix timestamp) to load from
+            Start time in the OUTPUT time system
         duration : float, optional
             Duration in seconds to load
+        output_time_system : str
+            Desired output time system ('unix', 'gps', 'same')
+            - 'unix': Convert to UNIX time
+            - 'gps': Convert to GPS time
+            - 'same': Keep same as input (default)
             
         Returns:
         --------
         pd.DataFrame
             IMU data with columns: time, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z
         """
+        # First read the raw data
         if self.format == 'csv':
-            return self._read_csv(start_time, duration)
+            df = self._read_csv(None, None)  # Read all data first
+        elif self.format == 'txt':
+            df = self._read_txt(None, None)
+        else:
+            raise ValueError(f"Unsupported format: {self.format}")
+        
+        # Convert time if needed
+        if output_time_system != 'same' and output_time_system != self.input_time_system:
+            df = self._convert_time_system(df, self.input_time_system, output_time_system)
+        
+        # Apply time filters after conversion
+        if start_time is not None:
+            df = df[df['time'] >= start_time]
+        if duration is not None and start_time is not None:
+            df = df[df['time'] <= start_time + duration]
+        
+        return df
+    
+    def _convert_time_system(self, df: pd.DataFrame, from_system: str, to_system: str) -> pd.DataFrame:
+        """
+        Convert time between different time systems
+        """
+        if from_system == to_system:
+            return df
+        
+        df = df.copy()
+        
+        if from_system == 'unix' and to_system == 'gps':
+            # Convert UNIX to GPS
+            df['time'] = df['time'] - self.GPS_TO_UNIX_OFFSET + self.LEAP_SECONDS_2015
+            self.logger.info(f"Converted time from UNIX to GPS (offset: {-self.GPS_TO_UNIX_OFFSET + self.LEAP_SECONDS_2015})")
+        elif from_system == 'gps' and to_system == 'unix':
+            # Convert GPS to UNIX
+            df['time'] = df['time'] + self.GPS_TO_UNIX_OFFSET - self.LEAP_SECONDS_2015
+            self.logger.info(f"Converted time from GPS to UNIX (offset: {self.GPS_TO_UNIX_OFFSET - self.LEAP_SECONDS_2015})")
+        
+        if self.format == 'csv':
+            return df
         elif self.format == 'txt':
             return self._read_txt(start_time, duration)
         else:

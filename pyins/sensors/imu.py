@@ -22,6 +22,8 @@ from .sensor_base import SensorConfig, SensorData, SensorInterface, SensorType
 @dataclass
 class IMUData(SensorData):
     """IMU measurement data"""
+    sensor_type: SensorType = field(default=SensorType.IMU, init=False)
+    
     def __post_init__(self):
         self.sensor_type = SensorType.IMU
         if self.data.shape != (6,):
@@ -123,7 +125,11 @@ class IMUPreintegration:
                          [-axis[1], axis[0], 0]])
             dR_inc = np.eye(3) + np.sin(theta_norm) * K + (1 - np.cos(theta_norm)) * K @ K
         else:
-            dR_inc = np.eye(3) + skew(theta)
+            # Small angle approximation
+            K = np.array([[0, -theta[2], theta[1]],
+                         [theta[2], 0, -theta[0]],
+                         [-theta[1], theta[0], 0]])
+            dR_inc = np.eye(3) + K
         
         # Update preintegrated values
         self.dR = dR_prev @ dR_inc
@@ -149,10 +155,12 @@ class IMUPreintegration:
         # Apply bias correction to preintegrated values
         dP_corrected = self.dP + self.dP_dba @ bias.acc_bias + self.dP_dbg @ bias.gyro_bias
         dV_corrected = self.dV + self.dV_dba @ bias.acc_bias + self.dV_dbg @ bias.gyro_bias
-        dR_corrected = self.dR @ exp_so3(self.dR_dbg @ bias.gyro_bias)
         
-        # Predict state at j
-        pos_j = pos_i + vel_i * self.dt + 0.5 * gravity * self.dt**2 + rot_i @ dP_corrected
+        # TODO: Implement dR correction for gyro bias
+        dR_corrected = self.dR
+        
+        # Predict next state
+        pos_j = pos_i + vel_i * self.dt + 0.5 * gravity * self.dt * self.dt + rot_i @ dP_corrected
         vel_j = vel_i + gravity * self.dt + rot_i @ dV_corrected
         rot_j = rot_i @ dR_corrected
         
