@@ -15,7 +15,7 @@
 """
 Attitude angle wrapping utilities.
 
-This module provides functions for wrapping angles to specific ranges. All rotations 
+This module provides functions for wrapping angles to specific ranges. All rotations
 assume right-hand coordinate frames with euler angles in the order 'roll-pitch-yaw'
 and DCMs with the order of 'ZYX'.
 
@@ -39,12 +39,12 @@ HALF_PI = 0.5 * np.pi
 def wrapTo2Pi(v1):
     """
     Wrap angles to [0, 2π] range.
-    
+
     Parameters
     ----------
     v1 : array_like
         Vector of angles in radians
-        
+
     Returns
     -------
     v2 : ndarray
@@ -61,12 +61,12 @@ def wrapTo2Pi(v1):
 def wrapToPi(v1):
     """
     Wrap angles to [-π, π] range.
-    
+
     Parameters
     ----------
     v1 : array_like
         Vector of angles in radians
-        
+
     Returns
     -------
     v2 : ndarray
@@ -83,24 +83,24 @@ def wrapToPi(v1):
 def wrapEulerAngles(e):
     """
     Wrap euler angles to proper ranges.
-    
+
     This function ensures:
     - Roll and yaw are wrapped to [-π, π]
     - Pitch is kept within [-π/2, π/2], with appropriate adjustments
       to roll and yaw when pitch exceeds these bounds
-    
+
     Parameters
     ----------
     e : array_like, shape (3,)
         Vector of euler angles (roll-pitch-yaw) in radians
-        
+
     Returns
     -------
     e2 : ndarray, shape (3,)
         Vector of normalized euler angles (roll-pitch-yaw) in radians
     """
     e2 = e.copy()
-    
+
     if e2[1] > HALF_PI:
         e2[1] = np.pi - e2[1]
         e2[0] = wrapToPi(np.array([e2[0] + np.pi]))[0]
@@ -112,5 +112,5 @@ def wrapEulerAngles(e):
     else:
         e2[0] = wrapToPi(np.array([e2[0]]))[0]
         e2[2] = wrapToPi(np.array([e2[2]]))[0]
-    
+
     return e2

@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .clock import *
 from .ephemeris import *
 from .satellite_position import *
-from .clock import *

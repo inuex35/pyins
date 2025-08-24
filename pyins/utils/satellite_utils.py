@@ -14,8 +14,9 @@
 
 """Satellite utilities for GNSS processing"""
 
-from typing import Dict, List, Tuple, Optional
 from enum import Enum
+from typing import Optional
+
 import numpy as np
 
 
@@ -33,23 +34,23 @@ class SatelliteSystem(Enum):
 def get_satellite_system(sat_num: int) -> SatelliteSystem:
     """
     Get satellite system from satellite number (PRN)
-    
+
     Parameters
     ----------
     sat_num : int
         Satellite PRN number
-        
+
     Returns
     -------
     SatelliteSystem
         Satellite system
-        
+
     Notes
     -----
     PRN ranges based on RINEX standards:
     - GPS: 1-32
     - GLONASS: 38-61, 65-96
-    - Galileo: 71-106, 201-236  
+    - Galileo: 71-106, 201-236
     - BeiDou: 87-172, 401-437
     - QZSS: 193-202
     - SBAS: 120-158
@@ -73,12 +74,12 @@ def get_satellite_system(sat_num: int) -> SatelliteSystem:
 def get_satellite_system_str(sat_num: int) -> str:
     """
     Get satellite system as string from satellite number (PRN)
-    
+
     Parameters
     ----------
     sat_num : int
         Satellite PRN number
-        
+
     Returns
     -------
     str
@@ -90,15 +91,15 @@ def get_satellite_system_str(sat_num: int) -> str:
     return system.value
 
 
-def count_satellites_by_system(sat_list: List[int]) -> Dict[str, int]:
+def count_satellites_by_system(sat_list: list[int]) -> dict[str, int]:
     """
     Count satellites by system
-    
+
     Parameters
     ----------
     sat_list : List[int]
         List of satellite PRN numbers
-        
+
     Returns
     -------
     Dict[str, int]
@@ -111,15 +112,15 @@ def count_satellites_by_system(sat_list: List[int]) -> Dict[str, int]:
     return counts
 
 
-def get_system_frequency_info(system: SatelliteSystem) -> Dict[str, float]:
+def get_system_frequency_info(system: SatelliteSystem) -> dict[str, float]:
     """
     Get frequency information for a satellite system
-    
+
     Parameters
     ----------
     system : SatelliteSystem
         Satellite system
-        
+
     Returns
     -------
     Dict[str, float]
@@ -152,21 +153,21 @@ def get_system_frequency_info(system: SatelliteSystem) -> Dict[str, float]:
             "L5": 1176.45e6
         }
     }
-    
+
     return frequency_info.get(system, {})
 
 
 def get_wavelength(sat_num: int, frequency_band: str = "L1") -> float:
     """
     Get signal wavelength for a satellite
-    
+
     Parameters
     ----------
     sat_num : int
         Satellite PRN number
     frequency_band : str, optional
         Frequency band (default: "L1")
-        
+
     Returns
     -------
     float
@@ -174,14 +175,14 @@ def get_wavelength(sat_num: int, frequency_band: str = "L1") -> float:
     """
     system = get_satellite_system(sat_num)
     freq_info = get_system_frequency_info(system)
-    
+
     # Map common frequency band names
     band_mapping = {
         "L1": ["L1", "E1", "B1"],
-        "L2": ["L2", "E5a", "B2"], 
+        "L2": ["L2", "E5a", "B2"],
         "L5": ["L5", "E5b", "B3"]
     }
-    
+
     # Try to find frequency
     frequency = None
     if frequency_band in freq_info:
@@ -192,10 +193,10 @@ def get_wavelength(sat_num: int, frequency_band: str = "L1") -> float:
             if mapped_bands in freq_info:
                 frequency = freq_info[mapped_bands]
                 break
-    
+
     if frequency is None:
         return 0.0
-        
+
     # Speed of light in m/s
     c = 299792458.0
     return c / frequency
@@ -204,12 +205,12 @@ def get_wavelength(sat_num: int, frequency_band: str = "L1") -> float:
 def validate_satellite_number(sat_num: int) -> bool:
     """
     Validate if satellite number is in valid range
-    
+
     Parameters
     ----------
     sat_num : int
         Satellite PRN number
-        
+
     Returns
     -------
     bool
@@ -221,12 +222,12 @@ def validate_satellite_number(sat_num: int) -> bool:
 def get_system_constellation_size(system: SatelliteSystem) -> int:
     """
     Get typical constellation size for a satellite system
-    
+
     Parameters
     ----------
     system : SatelliteSystem
         Satellite system
-        
+
     Returns
     -------
     int
@@ -240,7 +241,7 @@ def get_system_constellation_size(system: SatelliteSystem) -> int:
         SatelliteSystem.QZSS: 7,
         SatelliteSystem.SBAS: 10
     }
-    
+
     return constellation_sizes.get(system, 0)
 
 
@@ -249,12 +250,12 @@ class ProcessingOptions:
     def __init__(self):
         self.exsats = np.zeros(500, dtype=int)  # Excluded satellites array (0: auto, 1: exclude, 2: include)
         self.navsys = 0x1F  # Navigation systems (bit mask: GPS|GLO|GAL|BDS|QZS)
-        
+
     def set_excluded_satellite(self, sat_num: int, exclude: bool = True):
         """Set satellite exclusion status"""
         if 1 <= sat_num <= 500:
             self.exsats[sat_num - 1] = 1 if exclude else 2
-            
+
     def set_navigation_systems(self, gps=True, glonass=True, galileo=True, beidou=True, qzss=True, sbas=False):
         """Set navigation systems to use"""
         self.navsys = 0
@@ -282,7 +283,7 @@ def get_system_bitmask(system: SatelliteSystem) -> int:
 def satexclude(sat: int, svh: int, opt: Optional[ProcessingOptions] = None) -> bool:
     """
     Test if satellite should be excluded
-    
+
     Parameters
     ----------
     sat : int
@@ -291,12 +292,12 @@ def satexclude(sat: int, svh: int, opt: Optional[ProcessingOptions] = None) -> b
         SV health flag (0: healthy, >0: unhealthy, <0: no ephemeris)
     opt : ProcessingOptions, optional
         Processing options containing exclusion settings
-        
+
     Returns
     -------
     bool
         True if satellite should be excluded, False otherwise
-        
+
     Notes
     -----
     This function implements the same logic as RTKLIB's satexclude:
@@ -309,11 +310,11 @@ def satexclude(sat: int, svh: int, opt: Optional[ProcessingOptions] = None) -> b
     # Check if ephemeris is available
     if svh < 0:
         return True  # Ephemeris unavailable
-        
+
     # Get satellite system
     sys = get_satellite_system(sat)
     sys_mask = get_system_bitmask(sys)
-    
+
     if opt is not None:
         # Check manual exclusion settings
         if 1 <= sat <= 500:
@@ -321,18 +322,18 @@ def satexclude(sat: int, svh: int, opt: Optional[ProcessingOptions] = None) -> b
                 return True  # Manually excluded
             if opt.exsats[sat - 1] == 2:
                 return False  # Manually included
-                
+
         # Check if satellite system is selected
         if not (sys_mask & opt.navsys):
             return True  # System not selected
-            
+
     # Special handling for QZSS LEX health
     if sys == SatelliteSystem.QZSS:
         svh &= 0xFE  # Mask QZSS LEX health bit
-        
+
     # Check satellite health
     if svh:
         # Satellite is unhealthy
         return True
-        
-    return False  # Satellite is not excluded 
+
+    return False  # Satellite is not excluded

@@ -52,22 +52,22 @@ CHAR_TO_SYS = {v: k for k, v in SYS_TO_CHAR.items()}
 def prn_to_sat(system_char, prn):
     """
     Convert system character and PRN to internal satellite number
-    
+
     Parameters
     ----------
     system_char : str
         Single character system identifier ('G', 'R', 'E', 'C', 'J', etc.)
     prn : int
         PRN number
-        
+
     Returns
     -------
     int
         Internal satellite number, or 0 if invalid
-        
+
     Satellite number ranges:
     - GPS (G): 1-32 -> 1-32
-    - SBAS (S): 33-64 -> 33-64  
+    - SBAS (S): 33-64 -> 33-64
     - GLONASS (R): 1-24 -> 65-88
     - Reserved: 89-96
     - Galileo (E): 1-36 -> 97-132
@@ -104,19 +104,19 @@ def prn_to_sat(system_char, prn):
     elif system_char == 'I':  # IRNSS
         if 1 <= prn <= 14:
             return prn + 200
-    
+
     return 0  # Invalid
 
 
 def sat_to_prn(sat):
     """
     Convert internal satellite number to PRN
-    
+
     Parameters
     ----------
     sat : int
         Internal satellite number
-        
+
     Returns
     -------
     int

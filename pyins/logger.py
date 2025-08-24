@@ -46,7 +46,7 @@ logging.Logger.trace = trace
 
 class ColoredFormatter(logging.Formatter):
     """Colored log formatter"""
-    
+
     # Color codes
     COLORS = {
         'TRACE': '\033[36m',     # Cyan
@@ -57,20 +57,20 @@ class ColoredFormatter(logging.Formatter):
         'CRITICAL': '\033[35m',  # Magenta
     }
     RESET = '\033[0m'
-    
+
     def format(self, record):
         log_color = self.COLORS.get(record.levelname, self.RESET)
         record.levelname = f"{log_color}{record.levelname}{self.RESET}"
         return super().format(record)
 
 
-def setup_logger(name: str = "rtk_ins", 
+def setup_logger(name: str = "rtk_ins",
                 level: str = "INFO",
                 log_file: Optional[str] = None,
                 console: bool = True) -> logging.Logger:
     """
     Setup logger with specified configuration
-    
+
     Parameters:
     -----------
     name : str
@@ -81,7 +81,7 @@ def setup_logger(name: str = "rtk_ins",
         Log file path (if None, no file logging)
     console : bool
         Enable console output
-        
+
     Returns:
     --------
     logging.Logger
@@ -90,15 +90,15 @@ def setup_logger(name: str = "rtk_ins",
     # Create logger
     logger = logging.getLogger(name)
     logger.setLevel(getattr(LogLevel, level.upper()).value)
-    
+
     # Remove existing handlers
     logger.handlers = []
-    
+
     # Console handler
     if console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(getattr(LogLevel, level.upper()).value)
-        
+
         # Use colored formatter for console
         console_format = ColoredFormatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -106,12 +106,12 @@ def setup_logger(name: str = "rtk_ins",
         )
         console_handler.setFormatter(console_format)
         logger.addHandler(console_handler)
-    
+
     # File handler
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(getattr(LogLevel, level.upper()).value)
-        
+
         # Plain formatter for file
         file_format = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -119,7 +119,7 @@ def setup_logger(name: str = "rtk_ins",
         )
         file_handler.setFormatter(file_format)
         logger.addHandler(file_handler)
-    
+
     return logger
 
 
@@ -130,17 +130,17 @@ def get_logger(name: str) -> logging.Logger:
 
 class LogContext:
     """Context manager for temporary log level change"""
-    
+
     def __init__(self, logger: logging.Logger, level: str):
         self.logger = logger
         self.new_level = getattr(LogLevel, level.upper()).value
         self.old_level = None
-        
+
     def __enter__(self):
         self.old_level = self.logger.level
         self.logger.setLevel(self.new_level)
         return self.logger
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.logger.setLevel(self.old_level)
 
@@ -184,13 +184,13 @@ def critical(msg, *args, **kwargs):
 
 class LoggerConfig:
     """Logger configuration manager for module-specific log levels"""
-    
+
     def __init__(self):
         self.module_levels = {}
         self.default_level = "INFO"
         self.log_file = None
         self.console = True
-        
+
     def set_module_level(self, module_name: str, level: str):
         """Set log level for specific module"""
         self.module_levels[module_name] = level
@@ -200,15 +200,15 @@ class LoggerConfig:
             logger.setLevel(getattr(LogLevel, level.upper()).value)
             for handler in logger.handlers:
                 handler.setLevel(getattr(LogLevel, level.upper()).value)
-                
+
     def set_default_level(self, level: str):
         """Set default log level for all modules"""
         self.default_level = level
-        
+
     def get_level_for_module(self, module_name: str) -> str:
         """Get log level for specific module"""
         return self.module_levels.get(module_name, self.default_level)
-        
+
     def configure_from_dict(self, config: dict):
         """Configure from dictionary"""
         if 'default_level' in config:
@@ -220,12 +220,12 @@ class LoggerConfig:
         if 'module_levels' in config:
             for module, level in config['module_levels'].items():
                 self.set_module_level(module, level)
-                
+
     def setup_all_loggers(self):
         """Setup all configured loggers"""
         # Setup default logger
         setup_logger("rtk_ins", self.default_level, self.log_file, self.console)
-        
+
         # Setup module-specific loggers
         for module, level in self.module_levels.items():
             setup_logger(module, level, self.log_file, self.console)
@@ -237,7 +237,7 @@ logger_config = LoggerConfig()
 
 def setup_logger_from_config(config: dict):
     """Setup loggers from configuration dictionary
-    
+
     Example config:
     {
         'default_level': 'INFO',

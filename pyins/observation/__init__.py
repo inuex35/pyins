@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .pseudorange import *
 from .carrier_phase import *
 from .measurement_model import *
+from .pseudorange import *

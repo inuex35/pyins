@@ -14,26 +14,27 @@
 
 """SP3 and CLK file downloader using HTTPS (inspired by gnss_lib_py)"""
 
-import os
 import gzip
-import urllib.request
-import urllib.error
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional, Tuple
+import os
 import ssl
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
 import certifi
 
 
-def gps_week_day(date: datetime) -> Tuple[int, int]:
+def gps_week_day(date: datetime) -> tuple[int, int]:
     """
     Calculate GPS week and day of week from date
-    
+
     Parameters
     ----------
     date : datetime
         Date to convert
-        
+
     Returns
     -------
     tuple
@@ -46,12 +47,12 @@ def gps_week_day(date: datetime) -> Tuple[int, int]:
     return gps_week, gps_dow
 
 
-def download_sp3_cddis(date: datetime, product: str = "igs", 
+def download_sp3_cddis(date: datetime, product: str = "igs",
                       cache_dir: str = "./sp3_cache",
                       overwrite: bool = False) -> Optional[str]:
     """
     Download SP3 file from NASA CDDIS using HTTPS
-    
+
     Parameters
     ----------
     date : datetime
@@ -63,7 +64,7 @@ def download_sp3_cddis(date: datetime, product: str = "igs",
         Directory to cache downloaded SP3 files
     overwrite : bool
         Whether to overwrite existing file
-        
+
     Returns
     -------
     str or None
@@ -71,11 +72,11 @@ def download_sp3_cddis(date: datetime, product: str = "igs",
     """
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
-    
+
     gps_week, gps_dow = gps_week_day(date)
     year = date.year
     doy = date.timetuple().tm_yday  # Day of year
-    
+
     # Construct filename based on product type
     if product == "igs":
         # IGS final product
@@ -100,42 +101,42 @@ def download_sp3_cddis(date: datetime, product: str = "igs",
         url_path = f"/gnss/products/mgex/{gps_week:04d}/{filename}.gz"
     else:
         raise ValueError(f"Unknown product type: {product}")
-    
+
     # Check if file already exists
     local_path = cache_path / filename
     if local_path.exists() and not overwrite:
         print(f"SP3 file already exists: {local_path}")
         return str(local_path)
-    
+
     # Try multiple servers
     servers = [
         ("https://igs.bkg.bund.de", url_path.replace("/gnss", "")),  # BKG server
         ("https://cddis.nasa.gov", url_path),  # NASA CDDIS
     ]
-    
+
     # Create SSL context with certifi certificates
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    
+
     # Download compressed file
     compressed_path = local_path.with_suffix(local_path.suffix + ('.gz' if '.gz' in url_path else '.Z'))
-    
+
     for base_url, path in servers:
         full_url = base_url + path
         print(f"Trying to download SP3 from: {full_url}")
-        
+
         try:
             # Create request with headers
             request = urllib.request.Request(full_url)
             request.add_header('User-Agent', 'pyins SP3 downloader')
-            
+
             # Download file
             with urllib.request.urlopen(request, context=ssl_context, timeout=30) as response:
                 with open(compressed_path, 'wb') as f:
                     f.write(response.read())
-            
+
             print(f"Downloaded compressed file: {compressed_path}")
             break  # Success, exit the loop
-            
+
         except urllib.error.HTTPError as e:
             print(f"HTTP Error {e.code} from {base_url}: {e.reason}")
             if e.code == 404:
@@ -153,7 +154,7 @@ def download_sp3_cddis(date: datetime, product: str = "igs",
         if compressed_path.exists():
             os.remove(compressed_path)
         return None
-    
+
     # Decompress file
     try:
         if compressed_path.suffix == '.gz':
@@ -173,17 +174,17 @@ def download_sp3_cddis(date: datetime, product: str = "igs",
                 try:
                     subprocess.run(['gzip', '-d', str(compressed_path)], check=True)
                 except (subprocess.CalledProcessError, FileNotFoundError):
-                    print(f"Cannot decompress .Z file - uncompress/gzip not available")
+                    print("Cannot decompress .Z file - uncompress/gzip not available")
                     os.remove(compressed_path)
                     return None
-        
+
         if local_path.exists():
             print(f"Successfully downloaded and decompressed: {local_path}")
             return str(local_path)
         else:
-            print(f"Decompression failed")
+            print("Decompression failed")
             return None
-            
+
     except Exception as e:
         print(f"Error during decompression: {e}")
         if compressed_path.exists():
@@ -196,7 +197,7 @@ def download_clk_cddis(date: datetime, product: str = "igs",
                        overwrite: bool = False) -> Optional[str]:
     """
     Download CLK file from NASA CDDIS using HTTPS
-    
+
     Parameters
     ----------
     date : datetime
@@ -208,7 +209,7 @@ def download_clk_cddis(date: datetime, product: str = "igs",
         Directory to cache downloaded CLK files
     overwrite : bool
         Whether to overwrite existing file
-        
+
     Returns
     -------
     str or None
@@ -216,11 +217,11 @@ def download_clk_cddis(date: datetime, product: str = "igs",
     """
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
-    
+
     gps_week, gps_dow = gps_week_day(date)
     year = date.year
     doy = date.timetuple().tm_yday
-    
+
     # Construct filename based on product type
     if product == "igs":
         # IGS final product
@@ -240,42 +241,42 @@ def download_clk_cddis(date: datetime, product: str = "igs",
         url_path = f"/gnss/products/mgex/{gps_week:04d}/{filename}.gz"
     else:
         raise ValueError(f"Unknown product type: {product}")
-    
+
     # Check if file already exists
     local_path = cache_path / filename
     if local_path.exists() and not overwrite:
         print(f"CLK file already exists: {local_path}")
         return str(local_path)
-    
+
     # Try multiple servers
     servers = [
         ("https://igs.bkg.bund.de", url_path.replace("/gnss", "")),  # BKG server
         ("https://cddis.nasa.gov", url_path),  # NASA CDDIS
     ]
-    
+
     # Create SSL context with certifi certificates
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    
+
     # Download compressed file
     compressed_path = local_path.with_suffix(local_path.suffix + ('.gz' if '.gz' in url_path else '.Z'))
-    
+
     for base_url, path in servers:
         full_url = base_url + path
         print(f"Trying to download CLK from: {full_url}")
-        
+
         try:
             # Create request with headers
             request = urllib.request.Request(full_url)
             request.add_header('User-Agent', 'pyins CLK downloader')
-            
+
             # Download file
             with urllib.request.urlopen(request, context=ssl_context, timeout=30) as response:
                 with open(compressed_path, 'wb') as f:
                     f.write(response.read())
-            
+
             print(f"Downloaded compressed file: {compressed_path}")
             break  # Success, exit the loop
-            
+
         except urllib.error.HTTPError as e:
             print(f"HTTP Error {e.code} from {base_url}: {e.reason}")
             continue
@@ -291,7 +292,7 @@ def download_clk_cddis(date: datetime, product: str = "igs",
         if compressed_path.exists():
             os.remove(compressed_path)
         return None
-    
+
     # Decompress file
     try:
         if compressed_path.suffix == '.gz':
@@ -309,17 +310,17 @@ def download_clk_cddis(date: datetime, product: str = "igs",
                 try:
                     subprocess.run(['gzip', '-d', str(compressed_path)], check=True)
                 except (subprocess.CalledProcessError, FileNotFoundError):
-                    print(f"Cannot decompress .Z file")
+                    print("Cannot decompress .Z file")
                     os.remove(compressed_path)
                     return None
-        
+
         if local_path.exists():
             print(f"Successfully downloaded and decompressed: {local_path}")
             return str(local_path)
         else:
-            print(f"Decompression failed")
+            print("Decompression failed")
             return None
-            
+
     except Exception as e:
         print(f"Error during decompression: {e}")
         if compressed_path.exists():
@@ -330,20 +331,20 @@ def download_clk_cddis(date: datetime, product: str = "igs",
 def get_best_sp3_product(date: datetime, cache_dir: str = "./sp3_cache") -> Optional[str]:
     """
     Download the best available SP3 product for a given date
-    
+
     Strategy (following gnss_lib_py approach):
     - Within 2 days: Try IGU (ultra-rapid)
-    - Within 3-17 days: Try IGR (rapid) 
+    - Within 3-17 days: Try IGR (rapid)
     - Older than 17 days: Try IGS (final)
     - Fallback: Try CODE or GFZ MGEX products
-    
+
     Parameters
     ----------
     date : datetime
         Date for which to download SP3
     cache_dir : str
         Cache directory
-        
+
     Returns
     -------
     str or None
@@ -351,7 +352,7 @@ def get_best_sp3_product(date: datetime, cache_dir: str = "./sp3_cache") -> Opti
     """
     now = datetime.now()
     age_days = (now - date).days
-    
+
     # Determine product priority based on age
     if age_days <= 2:
         products = ['igu', 'igr', 'gfz', 'cod']
@@ -359,12 +360,12 @@ def get_best_sp3_product(date: datetime, cache_dir: str = "./sp3_cache") -> Opti
         products = ['igr', 'igs', 'gfz', 'cod']
     else:
         products = ['igs', 'cod', 'gfz', 'igr']
-    
+
     # Try each product in order
     for product in products:
         print(f"Trying {product.upper()} product...")
         sp3_file = download_sp3_cddis(date, product, cache_dir)
         if sp3_file:
             return sp3_file
-    
+
     return None
