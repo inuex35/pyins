@@ -64,10 +64,12 @@ jobs:
     
     - name: Lint with ruff (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
         pip install ruff
-        ruff check pyins tests --output-format=github || echo "Linting completed with warnings"
-        ruff format --check pyins tests || echo "Format check completed with warnings"
+        ruff check pyins tests --output-format=github; if ($LASTEXITCODE -ne 0) { Write-Host "Linting completed with warnings" }
+        ruff format --check pyins tests; if ($LASTEXITCODE -ne 0) { Write-Host "Format check completed with warnings" }
+        exit 0
 
     - name: Type check with mypy (Unix/Linux/macOS)
       if: runner.os != 'Windows'
@@ -77,9 +79,11 @@ jobs:
     
     - name: Type check with mypy (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
         pip install mypy types-requests
-        mypy pyins --ignore-missing-imports --no-strict-optional || echo "Type check completed with warnings"
+        mypy pyins --ignore-missing-imports --no-strict-optional; if ($LASTEXITCODE -ne 0) { Write-Host "Type check completed with warnings" }
+        exit 0
 
     - name: Run tests with pytest (Unix/Linux/macOS)
       if: runner.os != 'Windows'
@@ -124,13 +128,22 @@ jobs:
         comment_title: Test Results
         fail_on: nothing
     
-    - name: Comment test results on PR (Windows/macOS)
-      if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest' && matrix.python-version == '3.12' && always()
+    - name: Comment test results on PR (macOS)
+      if: github.event_name == 'pull_request' && matrix.os == 'macos-latest' && matrix.python-version == '3.12' && always()
+      uses: EnricoMi/publish-unit-test-result-action/macos@v2
+      with:
+        files: test-results.xml
+        check_name: Test Results (macOS)
+        comment_title: Test Results (macOS)
+        fail_on: nothing
+    
+    - name: Comment test results on PR (Windows)
+      if: github.event_name == 'pull_request' && matrix.os == 'windows-latest' && matrix.python-version == '3.12' && always()
       uses: EnricoMi/publish-unit-test-result-action/windows@v2
       with:
         files: test-results.xml
-        check_name: Test Results (${{ matrix.os }})
-        comment_title: Test Results (${{ matrix.os }})
+        check_name: Test Results (Windows)
+        comment_title: Test Results (Windows)
         fail_on: nothing
 
   benchmark:
