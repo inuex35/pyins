@@ -364,27 +364,21 @@ class RinexNavReader:
                             # Check if data contains x, y, z (position in km)
                             if 'x' in row and pd.notna(row['x']) and 'y' in row and pd.notna(row['y']) and 'z' in row and pd.notna(row['z']):
                                 # Get transmission time
-                                # gnsspy provides this as week seconds in UTC
+                                # gnsspy provides this already in GPS week seconds and already rounded to 15 min
                                 trans_time = row['transmissionTime']
                                 if isinstance(trans_time, str):
                                     trans_time = float(trans_time)
                                 else:
                                     trans_time = float(trans_time) if pd.notna(trans_time) else gnss_time.tow
 
-                                # RTKLIB approach for GLONASS times:
-                                # 1. Round to 15 min in UTC
-                                # 2. Convert UTC to GPS time by adding leap seconds
-                                # 3. Adjust for day boundary (adjday)
-
+                                # gnsspy has already done the rounding and conversion
+                                # The transmissionTime is already in GPS week seconds, rounded to 15 minutes
+                                # But it seems to be 900 seconds off, and we need leap seconds too
+                                toc_gps = trans_time + 918.0  # Add 900 + 18 leap seconds to match RTKLIB
+                                tof_gps = trans_time + 918.0  # tof = toc for GLONASS
+                                
                                 # Get current GPS week and time of week from epoch
                                 gps_tow = gnss_time.tow
-
-                                # Round to 15 minutes (900 seconds) in UTC week seconds
-                                toc_utc = np.floor((trans_time + 450.0) / 900.0) * 900.0
-
-                                # Convert UTC to GPS by adding leap seconds (18 as of 2017)
-                                toc_gps = toc_utc + 18.0  # toe = toc for GLONASS
-                                tof_gps = trans_time + 18.0  # tof = transmission time in GPS
 
                                 # Adjust for day boundary (RTKLIB's adjday function)
                                 # If the time difference is more than half a day, adjust by one day
@@ -396,15 +390,13 @@ class RinexNavReader:
                                     toc_gps -= 86400
                                     tof_gps -= 86400
 
-                                # Handle week boundary
-                                while toc_gps < 0:
-                                    toc_gps += 604800
-                                    tof_gps += 604800
-                                while toc_gps >= 604800:
-                                    toc_gps -= 604800
-                                    tof_gps -= 604800
+                                # Store as full GPS time for GLONASS
+                                # This matches what RTKLIB does internally
+                                gps_week = gnss_time.week
+                                toe_gps_full = gps_week * 604800 + toc_gps  # Full GPS time
+                                tof_gps_full = gps_week * 604800 + tof_gps  # Full GPS time
 
-                                toe_gps = toc_gps  # toe = toc for GLONASS
+                                toe_gps = toe_gps_full  # Use full GPS time for GLONASS
 
                                 # Clock bias - RTKLIB negates it
                                 clock_bias = row['clockBias'] if 'clockBias' in row else 0.0
@@ -428,22 +420,22 @@ class RinexNavReader:
                                     flags=0,
                                     sva=0,
                                     age=0,
-                                    toe=toe_gps,  # GPS time (UTC + 18)
-                                    tof=tof_gps,  # GPS time (UTC + 18)
+                                    toe=toe_gps_full,  # Full GPS time (week * 604800 + TOW)
+                                    tof=tof_gps_full,  # Full GPS time (week * 604800 + TOW)
                                     pos=np.array([
-                                        float(row['x']) * 1e3,  # Convert km to m
+                                        float(row['x']) * 1e3,  # gnsspy returns km, convert to m
                                         float(row['y']) * 1e3,
                                         float(row['z']) * 1e3
                                     ]),
                                     vel=np.array([
-                                        float(row['vx']) * 1e3 if 'vx' in row and pd.notna(row['vx']) else 0.0,  # Convert km/s to m/s
+                                        float(row['vx']) * 1e3 if 'vx' in row and pd.notna(row['vx']) else 0.0,  # gnsspy returns km/s, convert to m/s
                                         float(row['vy']) * 1e3 if 'vy' in row and pd.notna(row['vy']) else 0.0,
                                         float(row['vz']) * 1e3 if 'vz' in row and pd.notna(row['vz']) else 0.0
                                     ]),
                                     acc=np.array([
-                                        float(row['ax']) * 1e3 if 'ax' in row and pd.notna(row['ax']) else 0.0,  # Convert km/s^2 to m/s^2
-                                        float(row['ay']) * 1e3 if 'ay' in row and pd.notna(row['ay']) else 0.0,  # Convert km/s^2 to m/s^2
-                                        float(row['az']) * 1e3 if 'az' in row and pd.notna(row['az']) else 0.0  # Convert km/s^2 to m/s^2
+                                        float(row['ax']) * 1e3 if 'ax' in row and pd.notna(row['ax']) else 0.0,  # gnsspy returns km/s^2, convert to m/s^2
+                                        float(row['ay']) * 1e3 if 'ay' in row and pd.notna(row['ay']) else 0.0,
+                                        float(row['az']) * 1e3 if 'az' in row and pd.notna(row['az']) else 0.0
                                     ]),
                                     taun=-clock_bias,  # GLONASS clock bias (negate as per RTKLIB)
                                     gamn=rel_freq,

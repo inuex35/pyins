@@ -165,8 +165,10 @@ def eph2clk(t, eph):
     Parameters
     ----------
     t : float
-        Time of week in seconds (GPS TOW)
-        - For BeiDou, will be converted to BDT internally
+        Time in seconds:
+        - For GLONASS: Full GPS time
+        - For others: Time of week (GPS TOW)
+        - For BeiDou: Will be converted to BDT internally
     eph : Ephemeris or GloEphemeris
         Broadcast ephemeris
 
@@ -178,8 +180,8 @@ def eph2clk(t, eph):
     # Check if this is GLONASS ephemeris
     if hasattr(eph, 'taun'):  # GLONASS ephemeris
         # GLONASS clock model: dts = -taun + gamn * (t - toe)
-        # Following RTKLIB's geph2clk implementation
-        ts = timediff(t, eph.toe)
+        # Both t and eph.toe are full GPS time
+        ts = t - eph.toe
 
         # Limit time difference
         if abs(ts) > 3600.0:  # 1 hour for GLONASS
@@ -229,9 +231,10 @@ def eph2pos(t, eph):
     Parameters
     ----------
     t : float
-        Time of week in seconds:
-        - GPS TOW for GPS/QZSS/Galileo/GLONASS
-        - GPS TOW for BeiDou (will be converted to BDT internally)
+        Time in seconds:
+        - For GLONASS: Full GPS time
+        - For GPS/QZSS/Galileo: Time of week (GPS TOW)
+        - For BeiDou: GPS TOW (will be converted to BDT internally)
     eph : Ephemeris or GloEphemeris
         Broadcast ephemeris
 
@@ -425,10 +428,18 @@ def satpos(obs, nav):
 
         # Get time as float (GPS seconds)
         if hasattr(ob, 'time'):
-            gps_time = ob.time if isinstance(ob.time, (int, float)) else ob.time
+            obs_time = ob.time if isinstance(ob.time, (int, float)) else ob.time
         else:
             svh[i] = -1
             continue
+
+        # Convert UNIX time to GPS time if needed
+        if obs_time > 1.5e9:  # Likely UNIX time
+            GPS_UNIX_OFFSET = 315964800
+            LEAP_SECONDS = 18
+            gps_time = obs_time - GPS_UNIX_OFFSET + LEAP_SECONDS
+        else:
+            gps_time = obs_time
 
         # Calculate transmission time
         t_tx = gps_time - pr / CLIGHT
@@ -437,7 +448,7 @@ def satpos(obs, nav):
         from ..core.time import gps_seconds_to_week_tow
         week, tow = gps_seconds_to_week_tow(t_tx)
 
-        # Select ephemeris
+        # Select ephemeris (seleph expects TOW for all systems)
         eph = seleph(nav, tow, ob.sat)
         if eph is None:
             svh[i] = -1
@@ -445,18 +456,22 @@ def satpos(obs, nav):
 
         try:
             # Get satellite system
-            sat2sys(ob.sat)
+            sys = sat2sys(ob.sat)
 
-            # For GLONASS, use GPS time directly (no conversion)
-            # The GLONASS ephemeris computation should handle time internally
-            t_tx_tow = t_tx % 604800  # Convert to TOW (GPS time)
+            # For GLONASS, use full GPS time; for others, use TOW
+            if sys == 'R':  # GLONASS
+                # Use full GPS time for GLONASS (t_tx is already full GPS time)
+                time_for_eph = t_tx  # Full GPS time
+            else:
+                # Use TOW for GPS/Galileo/BeiDou
+                time_for_eph = tow  # Use the TOW we already calculated
 
             # Satellite clock correction
-            dt_sat = eph2clk(t_tx_tow, eph)
+            dt_sat = eph2clk(time_for_eph, eph)
             dts[i] = dt_sat
 
             # Satellite position at corrected transmission time
-            result = eph2pos(t_tx_tow - dt_sat, eph)
+            result = eph2pos(time_for_eph - dt_sat, eph)
 
             if result is not None:
                 # Handle different return types

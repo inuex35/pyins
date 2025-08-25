@@ -69,6 +69,20 @@ def geph2pos(geph: GloEphemeris, time: float) -> tuple:
         Position and clock variance (m^2)
     """
     t = time - geph.toe
+    
+    # Safety check: if time difference is too large, something is wrong
+    if abs(t) > 3600:  # More than 1 hour
+        # Time might be TOW instead of full GPS time
+        # Try to recover by converting TOW to full GPS time
+        week_seconds = (geph.toe // 604800) * 604800
+        time_full = week_seconds + time
+        t_corrected = time_full - geph.toe
+        if abs(t_corrected) < 3600:
+            t = t_corrected
+        else:
+            # Can't recover, return zero position
+            return np.zeros(3), 1e10, 0.0
+    
     dts = -geph.taun + geph.gamn * t
     x = np.array((*geph.pos, *geph.vel))
 
