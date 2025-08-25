@@ -98,6 +98,7 @@ OMGE_BDS = 7.292115E-5         # BeiDou earth angular velocity
 
 # GLONASS-specific parameters
 J2_GLO = 1.082627E-3           # GLONASS J2 coefficient
+GLONASS_TB_INTERVAL = 900.0    # GLONASS tb rounding interval (15 minutes in seconds)
 RE_GLO = 6378136.0             # GLONASS earth radius
 
 # Additional WGS84 constants from navlib

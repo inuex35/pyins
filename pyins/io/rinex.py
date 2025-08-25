@@ -364,18 +364,19 @@ class RinexNavReader:
                             # Check if data contains x, y, z (position in km)
                             if 'x' in row and pd.notna(row['x']) and 'y' in row and pd.notna(row['y']) and 'z' in row and pd.notna(row['z']):
                                 # Get transmission time
-                                # gnsspy provides this already in GPS week seconds and already rounded to 15 min
+                                # gnsspy provides tb (message frame time) in GPS week seconds
+                                # For GLONASS, tb is rounded to 15-minute boundaries
                                 trans_time = row['transmissionTime']
                                 if isinstance(trans_time, str):
                                     trans_time = float(trans_time)
                                 else:
                                     trans_time = float(trans_time) if pd.notna(trans_time) else gnss_time.tow
 
-                                # gnsspy has already done the rounding and conversion
-                                # The transmissionTime is already in GPS week seconds, rounded to 15 minutes
-                                # But it seems to be 900 seconds off, and we need leap seconds too
-                                toc_gps = trans_time + 918.0  # Add 900 + 18 leap seconds to match RTKLIB
-                                tof_gps = trans_time + 918.0  # tof = toc for GLONASS
+                                # GLONASS correction: tb is rounded to 15-minute boundaries
+                                # We need to add the interval + leap seconds to get the correct epoch time
+                                from ..core.constants import GPS_UTC_OFFSET, GLONASS_TB_INTERVAL
+                                toc_gps = trans_time + GLONASS_TB_INTERVAL + GPS_UTC_OFFSET  # Add tb interval + leap seconds
+                                tof_gps = toc_gps  # tof = toc for GLONASS
                                 
                                 # Get current GPS week and time of week from epoch
                                 gps_tow = gnss_time.tow
