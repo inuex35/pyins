@@ -267,7 +267,10 @@ def geph2clk(geph: GloEphemeris, time: float) -> float:
     for _ in range(2):
         t = ts - (-geph.taun + geph.gamn * t)
 
-    dts = -geph.taun + geph.gamn * t
+    # GLONASS clock correction with sign convention matching GPS
+    # Original: dts = -geph.taun + geph.gamn * t
+    # Negated to match GPS convention (positive means satellite clock is fast)
+    dts = -(-geph.taun + geph.gamn * t)
 
     return dts
 

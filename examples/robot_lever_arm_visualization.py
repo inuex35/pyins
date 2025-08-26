@@ -12,17 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Robot lever arm visualization example"""
+"""Robot lever arm visualization example
+
+This example demonstrates:
+1. Visualizing standard robot configurations
+2. Creating custom vehicle sensor layouts
+3. Displaying lever arms between components
+4. Multiple viewing angles for sensor positions
+"""
 
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-import sys
-import os
-
-# Add parent directory to path to import the module directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pyins', 'sensors'))
-from robot_lever_arm import RobotLeverArm, create_standard_robot_config
+from pyins.sensors.robot_lever_arm import RobotLeverArm, create_standard_robot_config
 
 def visualize_standard_robot():
     """Visualize standard robot configuration"""
@@ -68,7 +70,7 @@ def visualize_custom_robot():
     
     # 3D view
     ax1 = fig.add_subplot(221, projection='3d')
-    robot.visualize_components(ax=ax1, show_labels=True)
+    robot.visualize_components(ax=ax1, show_labels=True, show=False)
     ax1.set_title('3D View')
     ax1.view_init(elev=20, azim=45)
     

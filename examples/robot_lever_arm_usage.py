@@ -134,16 +134,16 @@ def example_sensor_fusion():
     
     # Calculate positions for all sensors
     print("Sensor positions in navigation frame:")
-    sensor_positions = robot.compensate_all_positions(position, R_body)
-    for sensor_id, pos in sensor_positions.items():
-        print(f"  {sensor_id}: {pos}")
+    for sensor_id in robot.list_components():
+        sensor_pos = robot.compensate_position(sensor_id, position, R_body)
+        print(f"  {sensor_id}: {sensor_pos}")
     
     # Calculate velocities for all sensors
     print("\nSensor velocities in navigation frame:")
-    sensor_velocities = robot.compensate_all_velocities(velocity, omega, R_body)
-    for sensor_id, vel in sensor_velocities.items():
-        speed = np.linalg.norm(vel)
-        print(f"  {sensor_id}: {vel} (speed: {speed:.2f} m/s)")
+    for sensor_id in robot.list_components():
+        sensor_vel = robot.compensate_velocity(sensor_id, velocity, omega, R_body)
+        speed = np.linalg.norm(sensor_vel)
+        print(f"  {sensor_id}: {sensor_vel} (speed: {speed:.2f} m/s)")
     
     # GNSS baseline for heading computation
     baseline = robot.get_lever_arm("gnss_rear", "gnss_front")

@@ -59,13 +59,13 @@ def compute_satellite_info(observations: list[Observation],
 
     # Determine which satellites to process
     if used_satellites is None:
-        # Process all satellites with valid pseudoranges (excluding GLONASS)
+        # Process all satellites with valid pseudoranges
         satellites_to_process = []
         for obs in observations:
-            if sat2sys(obs.sat) != SYS_GLO:  # Skip GLONASS
-                pr = obs.P[0] if obs.P[0] > 0 else obs.P[1]
-                if pr > 0:
-                    satellites_to_process.append(obs.sat)
+            # Include all satellites (including GLONASS)
+            pr = obs.P[0] if obs.P[0] > 0 else obs.P[1]
+            if pr > 0:
+                satellites_to_process.append(obs.sat)
     else:
         satellites_to_process = used_satellites
 
@@ -101,7 +101,15 @@ def compute_satellite_info(observations: list[Observation],
                 continue
 
             # Calculate satellite position
-            sat_pos, sat_var, dts = eph2pos(tow, eph)
+            # For GLONASS, use full GPS time; for others, use TOW
+            if sys == SYS_GLO:
+                # GLONASS needs full GPS time
+                time_for_eph = tc_tx.get_gps_seconds()
+            else:
+                # Other systems use TOW
+                time_for_eph = tow
+                
+            sat_pos, sat_var, dts = eph2pos(time_for_eph, eph)
 
             # Store satellite information
             satellite_info['positions'][sat_num] = sat_pos
