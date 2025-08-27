@@ -1,4 +1,4 @@
-# Copyright 2024 inuex35
+# Copyright 2024 The PyIns Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,41 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Robust Single Point Positioning with multi-GNSS support"""
-
-import logging
-from typing import Optional
+"""Single Point Positioning (SPP) core implementation"""
 
 import numpy as np
 from numpy.linalg import norm
 
-from ..coordinate import ecef2llh
-from ..core.constants import *
-from ..core.constants import SYS_BDS, SYS_GAL, sat2sys
-from ..core.data_structures import NavigationData, Observation, Solution
-from .glonass_ifb import GLONASSBias
+from pyins.coordinate import ecef2llh
+from pyins.core.constants import (
+    CLIGHT, OMGE, RE_WGS84,
+    SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, SYS_QZS,
+    sat2sys, sys2char
+)
+from pyins.core.data_structures import Solution
+from pyins.core.unified_time import TimeCore
+from pyins.gnss.ephemeris import eph2pos, seleph
+from pyins.gnss.raim import raim_fde
 
-logger = logging.getLogger(__name__)
+
+# Constants
+MAXITR = 10          # max iterations
+MIN_EL = 5.0         # min elevation in degrees
+ERR_SAAS = 0.3       # Saastamoinen model error
+ERR_ION = 5.0        # Ionosphere error
+ERR_CBIAS = 0.3      # Code bias error
 
 
-def robust_troposphere_model(pos: np.ndarray, el: float) -> float:
-    """
-    Robust troposphere delay model that handles edge cases
-    """
-    # Saastamoinen model parameters
+def tropmodel_simple(pos, el):
+    """Simple tropospheric model (Saastamoinen-like)"""
+    if el < np.deg2rad(MIN_EL):
+        return 0.0
+
+    # Standard atmosphere at sea level
     P0 = 1013.25  # hPa
     T0 = 288.15   # K
-    e0 = 11.75    # hPa
+    e0 = 11.75    # hPa (water vapor pressure)
 
-    # Height correction with bounds
+    # Height correction
     h = pos[2] if len(pos) > 2 else 0.0
-    h = np.clip(h, -500.0, 9000.0)  # Reasonable height bounds
-
-    # Latitude for pressure correction
-    lat = 0.0
-    if norm(pos) > RE_WGS84:
-        llh = ecef2llh(pos)
-        lat = llh[0]
+    if h < 0:
+        h = 0.0
 
     # Pressure and temperature at height
     P = P0 * (1 - 2.26e-5 * h) ** 5.225
@@ -54,427 +58,282 @@ def robust_troposphere_model(pos: np.ndarray, el: float) -> float:
     e = e0 * (T / T0) ** 4.0
 
     # Zenith delays
-    zhd = 0.0022768 * P / (1 - 0.00266 * np.cos(2 * lat) - 0.00028e-3 * h)
+    zhd = 0.0022768 * P / (1 - 0.00266 * np.cos(2 * pos[0]) - 0.00028e-3 * h)
     zwd = 0.0022768 * (1255 / T + 0.05) * e
 
-    # Mapping function with elevation cutoff
-    el_deg = np.rad2deg(el)
-    if el_deg < 5.0:
-        return 0.0  # Skip very low elevation satellites
-
-    mapf = 1.0 / np.sin(el) if el > 0.1 else 10.0
+    # Mapping function (simple)
+    mapf = 1.0 / np.sin(el)
 
     return (zhd + zwd) * mapf
 
 
-def spp_solve(observations: list[Observation],
-                     nav_data: NavigationData,
-                     max_iter: int = 20,  # Increased iterations
-                     converge_threshold: float = 0.1,  # 10cm convergence threshold
-                     systems_to_use: Optional[list[str]] = None,
-                     use_glonass_ifb: bool = True,
-                     use_all_frequencies: bool = True) -> tuple[Optional[Solution], list[int]]:
-    """
-    Robust SPP solver with better error handling
-
-    Parameters
-    ----------
-    observations : List[Observation]
-        List of GNSS observations
-    nav_data : NavigationData
-        Navigation data containing ephemerides
-    max_iter : int
-        Maximum number of iterations
-    converge_threshold : float
-        Convergence threshold in meters
-    systems_to_use : Optional[List[str]]
-        List of systems to use: 'G'(GPS), 'R'(GLONASS), 'E'(Galileo), 'C'(BeiDou), 'J'(QZSS)
-        Default: ['G', 'E', 'C', 'J'] (excludes GLONASS due to IFB)
-    use_glonass_ifb : bool
-        Whether to apply GLONASS IFB correction (only relevant if 'R' in systems_to_use)
-
-    Returns
-    -------
-    Tuple[Optional[Solution], List[int]]
-        Solution object and list of used satellite numbers
-    """
-    # Default systems
-    if systems_to_use is None:
-        systems_to_use = ['G', 'R', 'E', 'C', 'J']  # Include all major systems
-
-    # Convert system chars to IDs
-    sys_char_to_id = {
-        'G': SYS_GPS,
-        'R': SYS_GLO,
-        'E': SYS_GAL,
-        'C': SYS_BDS,
-        'J': SYS_QZS
-    }
-
-    allowed_systems = set()
-    for sys_char in systems_to_use:
-        if sys_char in sys_char_to_id:
-            allowed_systems.add(sys_char_to_id[sys_char])
-
-    # Collect valid observations with their frequencies
-    valid_obs_freqs = []
-    for obs in observations:
-        # Check if satellite system is allowed
-        sys = sat2sys(obs.sat)
-        if sys not in allowed_systems:
-            continue
-
-        # Collect all available frequencies for this satellite
-        if use_all_frequencies:
-            freqs = []
-            # Check L1/E1/B1 (index 0)
-            if obs.P[0] > 0 and 1e6 < obs.P[0] < 100e6:  # Increased upper limit
-                freqs.append((0, obs.P[0]))
-            # Check L2/E5b/B2 (index 1)
-            if obs.P[1] > 0 and 1e6 < obs.P[1] < 100e6:  # Increased upper limit
-                freqs.append((1, obs.P[1]))
-            # Check L5/E5a/B2a (index 2) if available
-            if len(obs.P) > 2 and obs.P[2] > 0 and 1e6 < obs.P[2] < 100e6:  # Increased upper limit
-                freqs.append((2, obs.P[2]))
-
-            # Add observation with all its frequencies
-            if freqs:
-                valid_obs_freqs.append((obs, freqs))
-        else:
-            # Original single-frequency behavior
-            pr = obs.P[0] if obs.P[0] > 0 else obs.P[1]
-            if pr > 0 and 1e6 < pr < 100e6:  # Increased upper limit
-                valid_obs_freqs.append((obs, [(0, pr)]))
-
-    # Count total measurements
-    total_measurements = sum(len(freqs) for _, freqs in valid_obs_freqs)
-
-    if total_measurements < 5:  # Need at least 5 measurements
-        logger.warning(f"Insufficient measurements: {total_measurements}")
-        return None, []
-
-    # Initial state - always start from origin (0,0,0) like RTKLIB
-    x = np.zeros(8)  # pos(3) + clk_gps + clk_glo + clk_gal + clk_bds + clk_qzs
-    # x[:3] stays at [0, 0, 0] for first iteration
-
-    # System indices for clock biases
-    sys_clk_idx = {
-        SYS_GPS: 3,
-        SYS_GLO: 4,
-        SYS_GAL: 5,
-        SYS_BDS: 6,
-        SYS_QZS: 3  # QZSS shares GPS clock
-    }
-
-    # Initialize GLONASS IFB handler
-    GLONASSBias() if use_glonass_ifb else None
-
-    used_sats = []
-
-    for iteration in range(max_iter):
-        H = []
-        y = []
-        used_sats = []
-        measurement_info = []
-
-        if iteration == 0:
-            logger.debug(f"Starting iteration {iteration} with {len(valid_obs_freqs)} observations")
-
-        # Use satpos function to compute all satellite positions at once
-        from .ephemeris import satpos
-
-        # Add time to observations for satpos
-        for obs, _ in valid_obs_freqs:
-            if not hasattr(obs, 'time'):
-                obs.time = observations[0].time if observations else 0
-
-        # Extract just the observations from valid_obs_freqs
-        valid_obs_list = [obs for obs, _ in valid_obs_freqs]
-
-        # Compute satellite positions using satpos
-        sat_positions, sat_clocks, sat_vars, sat_healths = satpos(valid_obs_list, nav_data)
-
-        for idx, (obs, freqs) in enumerate(valid_obs_freqs):
-            # Check satellite health from satpos (-1 means invalid)
-            if sat_healths[idx] == -1:
-                if iteration == 0:
-                    logger.debug(f"Skipping sat {obs.sat}: health=-1")
-                continue
-
-            # Get satellite position and clock from satpos results
-            sat_pos = sat_positions[idx]
-            dts = sat_clocks[idx]
-
-            # Validate position
-            if sat_pos is None or np.any(np.isnan(sat_pos)) or norm(sat_pos) < RE_WGS84:
-                if iteration == 0:
-                    logger.debug(f"Skipping sat {obs.sat}: invalid position")
-                continue
-
-            # Get satellite system
-            sys = sat2sys(obs.sat)
-
-            # Filter out problematic GAL 101 satellite
-            if sys == SYS_GAL and obs.sat == 101:
-                if iteration == 0:
-                    logger.debug(f"Skipping problematic GAL satellite {obs.sat}")
-                continue
-
-            # Filter out BDS GEO satellites (PRN 1-5, 59-63)
-            # These satellites have very high orbits and can cause issues
-            if sys == SYS_BDS:
-                from ..core.constants import sat2prn
-                prn = sat2prn(obs.sat)
-                if prn <= 5 or prn >= 59:
-                    if iteration == 0:
-                        logger.debug(f"Skipping BDS GEO satellite {obs.sat} (PRN {prn})")
-                    continue
-
-            # Filter satellites with abnormal pseudorange (>30000km for non-GEO)
-            # Get first available pseudorange
-            pr = 0
-            if len(freqs) > 0:
-                # freqs is a list of frequency indices
-                freq_idx = freqs[0] if isinstance(freqs[0], int) else freqs[0][0] if isinstance(freqs[0], tuple) else 0
-                if freq_idx < len(obs.P):
-                    pr = obs.P[freq_idx]
-            if pr <= 0:
-                # Try to find any valid pseudorange
-                for freq_idx in range(len(obs.P)):
-                    if obs.P[freq_idx] > 0:
-                        pr = obs.P[freq_idx]
-                        break
-            if pr > 30000000:  # 30,000 km threshold
-                if iteration == 0:
-                    logger.debug(f"Skipping sat {obs.sat}: abnormal pseudorange {pr/1000:.0f}km")
-                continue
-
-            # Geometric range
-            r = norm(sat_pos - x[:3])
-
-            # Line of sight vector
-            los = (x[:3] - sat_pos) / r
-
-            # Elevation angle
-            # For initial iterations with position near origin, don't check elevation
-            # This follows RTKLIB approach
-            if norm(x[:3]) < 1000.0:  # Position near origin
-                el = np.deg2rad(45.0)  # Default elevation
-            elif iteration < 3:  # First few iterations
-                el = np.deg2rad(45.0)  # Default elevation
-            else:
-                # Only check elevation after position converges
-                llh = ecef2llh(x[:3])
-                el = elevation_angle(x[:3], sat_pos, llh)
-                if el < np.deg2rad(10.0):  # 10 degree mask
-                    continue
-
-            # System-specific clock
-            sys = sat2sys(obs.sat)
-            clk_idx = sys_clk_idx.get(sys, 3)
-
-            # Troposphere delay (same for all frequencies)
-            trop = robust_troposphere_model(x[:3], el)
-
-            # Base weight based on elevation and system
-            base_weight = np.sin(el) if el > 0 else 0.1
-
-            # Reduce weight for GLONASS due to inter-frequency bias
-            # But not too much - GLONASS can still contribute
-            if sys == SYS_GLO:
-                base_weight *= 0.7  # Changed from 0.5 to 0.7
-
-            # Process each frequency
-            if iteration == 0 and idx < 3:
-                logger.debug(f"Processing sat {obs.sat}: {len(freqs)} frequencies")
-            for freq_idx, pr in freqs:
-                # Predicted range
-                rho_pred = r + x[clk_idx] - dts * CLIGHT + trop
-
-                # Observation equation
-                h = np.zeros(8)
-                h[:3] = los
-                h[clk_idx] = 1.0
-
-                # Residual
-                res = pr - rho_pred
-
-                # Debug first iteration
-                if iteration == 0 and idx < 3:
-                    logger.debug(f"  Sat {obs.sat} freq {freq_idx}: pr={pr:.1f}, pred={rho_pred:.1f}, res={res:.1f}")
-
-                # Outlier detection (after convergence begins)
-                # For initial iterations, allow large residuals (RTKLIB approach)
-                if iteration <= 2:
-                    # Accept all measurements in first iterations
-                    pass
-                elif iteration > 3 and abs(res) > 1000.0:  # 1km threshold
-                    continue  # Skip outlier
-
-                # Frequency-specific weight adjustment
-                # L1/E1/B1 typically most precise
-                freq_weight = 1.0 if freq_idx == 0 else 0.9
-                # Combined weight
-                w = base_weight * freq_weight
-
-                # Robust weighting based on residual (Huber weighting)
-                # Apply after initial convergence
-                if iteration > 2:
-                    k = 30.0  # Huber constant (30m)
-                    if abs(res) > k:
-                        w *= k / abs(res)
-                elif iteration == 0:
-                    # First iteration: use uniform weights
-                    w = 1.0
-
-                H.append(h * w)
-                y.append(res * w)
-
-                # Store measurement info
-                measurement_info.append({
-                    'sat': obs.sat,
-                    'freq': freq_idx,
-                    'residual': res,
-                    'elevation': np.rad2deg(el)
-                })
-
-            # Add satellite to used list (once per satellite, not per frequency)
-            if obs.sat not in used_sats:
-                used_sats.append(obs.sat)
-
-        if len(H) < 5:
-            logger.warning(f"Insufficient valid measurements: {len(H)}")
-            return None, []
-
-        # Solve normal equations
-        H = np.array(H)
-        y = np.array(y)
-
-        try:
-            # Remove unused clock parameters
-            used_params = [0, 1, 2]  # Always use position
-            for i in range(3, 8):
-                if np.any(H[:, i] != 0):
-                    used_params.append(i)
-
-            H_used = H[:, used_params]
-            HTH = H_used.T @ H_used
-            HTy = H_used.T @ y
-
-            # Add small regularization for stability
-            HTH += np.eye(len(used_params)) * 1e-9
-
-            dx_used = np.linalg.solve(HTH, HTy)
-
-            # Map back to full state
-            dx = np.zeros(8)
-            for i, idx in enumerate(used_params):
-                dx[idx] = dx_used[i]
-
-        except np.linalg.LinAlgError:
-            logger.warning("Failed to solve normal equations")
-            return None, []
-
-        # Update state
-        x += dx
-
-        # Check convergence
-        if norm(dx[:3]) < converge_threshold:
-            # Log frequency usage statistics
-            if use_all_frequencies:
-                freq_count = {0: 0, 1: 0, 2: 0}
-                for info in measurement_info:
-                    freq_count[info['freq']] += 1
-
-            # Create solution
-            # The state vector x has clock biases in meters:
-            # x[3] = GPS clock bias (in standard SPP, this absorbs the absolute bias)
-            # x[4] = GLO clock bias
-            # x[5] = GAL clock bias
-            # x[6] = BDS clock bias
-            # x[7] = QZS clock bias (same as GPS)
-
-            # Estimate the absolute GPS clock bias from residuals
-            # Since GPS is the reference, x[3] is typically close to 0
-            # The actual clock bias is absorbed in the pseudorange residuals
-
-            # We need to estimate the actual GPS clock from the data
-            # A typical receiver clock bias is around 70-80ms (21000-24000 km)
-            # But it can vary significantly
-
-            # RTKLIB style: GPS clock and ISBs
-            # x[3] = GPS clock bias
-            # x[4] = GLO clock bias = GPS clock + GLO ISB
-            # x[5] = GAL clock bias = GPS clock + GAL ISB
-            # x[6] = BDS clock bias = GPS clock + BDS ISB
-            # x[7] = QZS clock bias = GPS clock (same system)
-
-            raw_clocks = x[3:8].copy()  # Raw clock biases from solution
-
-            # Create RTKLIB-style output:
-            # dtr_meters[0] = GPS clock
-            # dtr_meters[1] = GLO ISB (relative to GPS)
-            # dtr_meters[2] = GAL ISB (relative to GPS)
-            # dtr_meters[3] = BDS ISB (relative to GPS)
-            # dtr_meters[4] = QZS ISB (0 for QZS as it's same as GPS)
-            dtr_meters = np.zeros(5)
-            dtr_meters[0] = raw_clocks[0]  # GPS clock
-            dtr_meters[1] = raw_clocks[1] - raw_clocks[0] if len(raw_clocks) > 1 else 0.0  # GLO ISB
-            dtr_meters[2] = raw_clocks[2] - raw_clocks[0] if len(raw_clocks) > 2 else 0.0  # GAL ISB
-            dtr_meters[3] = raw_clocks[3] - raw_clocks[0] if len(raw_clocks) > 3 else 0.0  # BDS ISB
-            dtr_meters[4] = 0.0  # QZS ISB (same as GPS)
-
-            # For compatibility, also keep absolute values
-            dtr_meters_absolute = raw_clocks.copy()
-
-            # Convert to seconds for standard output
-            dtr_seconds = dtr_meters / CLIGHT  # Relative values in seconds
-            dtr_seconds_absolute = dtr_meters_absolute / CLIGHT  # Absolute values in seconds
-
-            sol = Solution(
-                time=observations[0].time,
-                type=1,  # Single point
-                rr=x[:3].copy(),
-                vv=np.zeros(3),
-                dtr=dtr_seconds,  # Keep original relative values for compatibility
-                qr=np.zeros((6, 6)),  # Simplified
-                ns=len(used_sats),
-                age=0.0,
-                ratio=0.0
-            )
-
-            # Add both relative and absolute clock biases
-            sol.dtr_meters = dtr_meters  # Relative clock biases in meters
-            sol.dtr_absolute = dtr_seconds_absolute  # Absolute clock biases in seconds
-            sol.dtr_meters_absolute = dtr_meters_absolute  # Absolute clock biases in meters
-
-            return sol, used_sats
-
-    logger.warning("SPP did not converge")
-    return None, []
-
-
-def elevation_angle(rcv_pos: np.ndarray, sat_pos: np.ndarray, llh: np.ndarray) -> float:
-    """Calculate satellite elevation angle"""
-    # Vector from receiver to satellite
-    los = sat_pos - rcv_pos
-
-    # Local ENU transformation
-    lat, lon = llh[0], llh[1]
-
+def sagnac_correction(sat_pos, rec_pos):
+    """Sagnac effect correction"""
+    return (OMGE / CLIGHT) * (sat_pos[0] * rec_pos[1] - sat_pos[1] * rec_pos[0])
+
+
+def geodist(sat_pos, rec_pos):
+    """Geometric distance and unit vector"""
+    diff = sat_pos - rec_pos
+    r = norm(diff)
+    if r > 0:
+        e = diff / r
+    else:
+        e = np.zeros(3)
+    return r, e
+
+
+def satazel(pos, e):
+    """Satellite azimuth/elevation from receiver position and line-of-sight vector"""
+    lat, lon, _h = pos[0], pos[1], pos[2]
+
+    # ENU transformation matrix
     R = np.array([
         [-np.sin(lon), np.cos(lon), 0],
         [-np.sin(lat)*np.cos(lon), -np.sin(lat)*np.sin(lon), np.cos(lat)],
         [np.cos(lat)*np.cos(lon), np.cos(lat)*np.sin(lon), np.sin(lat)]
     ])
 
-    enu = R @ los
+    # Transform to ENU
+    enu = R @ e
 
-    # Elevation angle
-    el = np.arctan2(enu[2], np.sqrt(enu[0]**2 + enu[1]**2))
+    # Azimuth and elevation
+    az = np.arctan2(enu[0], enu[1])
+    if az < 0:
+        az += 2 * np.pi
+    el = np.arcsin(enu[2])
 
-    return el
+    return az, el
 
 
-# Alias for backward compatibility
-robust_spp_solve = spp_solve
+def varerr(sys, el):
+    """Variance of pseudorange error"""
+    a = 0.003  # Base error (m)
+    b = 0.003  # Elevation-dependent error (m)
+
+    s_el = np.sin(el)
+    if s_el <= 0:
+        return 100.0  # Large error for negative elevation
+
+    # Basic elevation-dependent model
+    var = (a ** 2) + (b / s_el) ** 2
+
+    # Add system-specific errors
+    if sys == SYS_GLO:
+        var *= 1.5  # GLONASS typically has larger errors
+    elif sys == SYS_BDS:
+        var *= 1.2  # BeiDou slightly larger errors
+
+    return var
+
+
+def single_point_positioning(observations, nav_data, initial_pos=None,
+                           systems_to_use=None, use_raim=True, raim_threshold=30.0):
+    """
+    Perform single point positioning using iterative least squares with RAIM
+
+    Parameters:
+    -----------
+    observations : list
+        List of GNSS observations
+    nav_data : NavigationData
+        Navigation data with ephemerides
+    initial_pos : np.ndarray, optional
+        Initial position estimate (ECEF)
+    systems_to_use : list, optional
+        List of satellite system characters to use (e.g., ['G', 'R'])
+    use_raim : bool, optional
+        Enable RAIM for fault detection (default: True)
+    raim_threshold : float, optional
+        RAIM residual threshold in meters (default: 30.0)
+
+    Returns:
+    --------
+    solution : Solution
+        Position solution
+    used_sats : list
+        List of satellites used in the solution
+    """
+    if not observations:
+        return None, []
+
+    # Default systems to use
+    if systems_to_use is None:
+        systems_to_use = ['G', 'E', 'C', 'J', 'R']
+
+    # Filter observations by system
+    filtered_obs = []
+    for obs in observations:
+        sys = sat2sys(obs.sat)
+        if sys == 0:
+            continue
+        sys_char = sys2char(sys)
+        if sys_char in systems_to_use:
+            filtered_obs.append(obs)
+
+    if len(filtered_obs) < 4:
+        return None, []
+
+    # Initial state [x, y, z, dtr_gps, dtr_glo, dtr_gal, dtr_bds]
+    if initial_pos is None:
+        x = np.zeros(7)
+    else:
+        x = np.zeros(7)
+        x[:3] = initial_pos.copy()
+
+    # Iterative least squares
+    for iteration in range(MAXITR):
+        H = []
+        v = []
+        var = []
+        used_sats = []
+
+        pos = x[:3]
+        dtr = x[3:]  # Clock biases in seconds
+
+        # Convert to LLH for elevation calculation
+        if norm(pos) > RE_WGS84:
+            llh = ecef2llh(pos)
+        else:
+            llh = np.array([0, 0, 0])
+
+        for obs in filtered_obs:
+            # Get pseudorange
+            pr = obs.P[0] if obs.P[0] > 0 else obs.P[1]
+            if pr <= 0:
+                continue
+
+            # Calculate transmission time
+            if isinstance(obs.time, (int, float)):
+                gps_week = int(obs.time // 604800)
+                gps_tow = obs.time % 604800
+                tc_rx = TimeCore.from_gps(gps_week, gps_tow)
+            else:
+                tc_rx = obs.time
+
+            tc_tx = tc_rx - (pr / CLIGHT)
+
+            # Get ephemeris
+            eph = seleph(nav_data, tc_tx, obs.sat)
+            if eph is None:
+                continue
+
+            # Get satellite position and clock
+            sat_pos, sat_var, dts = eph2pos(tc_tx, eph)
+            if np.any(np.isnan(sat_pos)) or norm(sat_pos) < RE_WGS84:
+                continue
+
+            # Geometric range and unit vector
+            r, e = geodist(sat_pos, pos)
+            if r <= 0:
+                continue
+
+            # Elevation check
+            if norm(pos) > RE_WGS84:
+                az, el = satazel(llh, e)
+                if el < np.deg2rad(MIN_EL):
+                    continue
+            else:
+                el = np.pi/4
+
+            # System-specific clock bias
+            sys = sat2sys(obs.sat)
+            if sys == SYS_GPS or sys == SYS_QZS:
+                clk_bias = dtr[0]
+                clk_idx = 0
+            elif sys == SYS_GLO:
+                clk_bias = dtr[0] + dtr[1]
+                clk_idx = 1
+            elif sys == SYS_GAL:
+                clk_bias = dtr[0] + dtr[2]
+                clk_idx = 2
+            elif sys == SYS_BDS:
+                clk_bias = dtr[0] + dtr[3]
+                clk_idx = 3
+            else:
+                continue
+
+            # Corrections
+            dtrp = tropmodel_simple(llh, el) if iteration > 0 else 0.0
+            dion = 0.0  # No ionosphere correction for single frequency
+            sagnac = sagnac_correction(sat_pos, pos)
+
+            # Pseudorange residual
+            res = pr - (r + sagnac + clk_bias * CLIGHT - dts * CLIGHT + dion + dtrp)
+
+            # Design matrix row
+            H_row = np.zeros(7)
+            H_row[:3] = -e
+            H_row[3] = CLIGHT  # GPS clock
+            if clk_idx > 0 and clk_idx < 4:
+                H_row[3 + clk_idx] = CLIGHT  # ISB term
+
+            H.append(H_row)
+            v.append(res)
+            var.append(varerr(sys, el))
+            used_sats.append(obs.sat)
+
+        if len(v) < 4:
+            return None, []
+
+        # Convert to arrays
+        H = np.array(H)
+        v = np.array(v)
+        var = np.array(var)
+
+        # Apply RAIM if enabled
+        if use_raim and len(v) > 5:
+            rms_residual = np.sqrt(np.mean(v**2))
+            if rms_residual > raim_threshold * 1000 or iteration > 0:
+                H, v, var, used_sats, excluded = raim_fde(H, v, var, used_sats, raim_threshold)
+                if len(v) < 4:
+                    return None, []
+
+        # Remove unused clock parameters
+        active_params = [True, True, True, True]  # x, y, z, dtr_gps always active
+        for i in range(1, 4):
+            if 3+i < H.shape[1]:
+                col_sum = np.sum(np.abs(H[:, 3+i]))
+                active_params.append(col_sum > 0)
+
+        active_idx = np.where(active_params[:H.shape[1]])[0]
+        H_reduced = H[:, active_idx]
+
+        # Weighted least squares
+        W = np.diag(1.0 / var)
+
+        try:
+            N = H_reduced.T @ W @ H_reduced
+            b = H_reduced.T @ W @ v
+            dx_reduced = np.linalg.solve(N, b)
+            dx = np.zeros(7)
+            dx[active_idx] = dx_reduced
+        except np.linalg.LinAlgError:
+            return None, []
+
+        # Update state
+        x += dx
+
+        # Check convergence
+        if norm(dx[:3]) < 1e-4:
+            break
+
+    # Create solution
+    pos = x[:3]
+    dtr = x[3:]
+
+    try:
+        Q = np.linalg.inv(H.T @ W @ H)
+    except:
+        Q = np.eye(7) * 100.0
+
+    solution = Solution(
+        time=observations[0].time,
+        type=5,  # Single point
+        rr=pos,
+        dtr=dtr,
+        qr=Q[:3, :3],
+        ns=len(used_sats)
+    )
+
+    return solution, used_sats

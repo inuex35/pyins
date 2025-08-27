@@ -16,6 +16,6 @@
 
 from .double_difference import form_double_differences
 from .satellite_positions import compute_satellite_info
-from .spp import spp_solve
+from .spp import single_point_positioning
 
-__all__ = ['spp_solve', 'compute_satellite_info', 'form_double_differences']
+__all__ = ['single_point_positioning', 'compute_satellite_info', 'form_double_differences']

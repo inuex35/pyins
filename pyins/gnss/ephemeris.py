@@ -83,8 +83,8 @@ def seleph(nav, t, sat):
     ----------
     nav : NavigationData
         Navigation data containing ephemerides
-    t : float
-        Time of interest (GPS seconds)
+    t : float or TimeCore
+        Time of interest (GPS seconds or TimeCore)
     sat : int
         Satellite number
 
@@ -96,11 +96,25 @@ def seleph(nav, t, sat):
     dt_best = 1e10
     eph_best = None
 
+    # Handle TimeCore input
+    if hasattr(t, 'get_tow'):
+        # It's a TimeCore object
+        t_tow = t.get_tow()
+        t_gps = t.get_gps_seconds()
+    else:
+        # It's a float - could be TOW or GPS seconds
+        if t > 604800:
+            t_tow = t % 604800
+            t_gps = t
+        else:
+            t_tow = t
+            t_gps = t  # Assume it's TOW for now
+
     # Get satellite system
     sys = sat2sys(sat)
 
     if sys != SYS_GLO:
-        # GPS, Galileo, BeiDou, QZSS, etc.
+        # GPS, Galileo, BeiDou, QZSS, etc. - use TOW
         for eph in nav.eph:
             if eph.sat != sat:
                 continue
@@ -110,10 +124,8 @@ def seleph(nav, t, sat):
                 # TODO: Check Galileo signal codes when needed
                 pass
 
-            # Calculate time difference from time of ephemeris
-            # Convert to time of week if needed
-            t_week = t % 604800 if t > 604800 else t
-            dt = abs(dtadjust(t_week, eph.toe))
+            # Calculate time difference from time of ephemeris using TOW
+            dt = abs(dtadjust(t_tow, eph.toe))
 
             # Select ephemeris with minimum time difference
             if dt <= dt_best:
@@ -124,18 +136,16 @@ def seleph(nav, t, sat):
                 break
 
     else:
-        # GLONASS uses geph
+        # GLONASS uses geph and needs full GPS time
         # For GLONASS, prefer past ephemeris over future ones
         # This matches RTKLIB behavior
         for geph in nav.geph:
             if geph.sat != sat:
                 continue
 
-            # Convert to time of week if needed
-            t_week = t % 604800 if t > 604800 else t
-
-            # Calculate time difference with week rollover handling
-            dt_raw = dtadjust(t_week, geph.toe)
+            # GLONASS ephemeris toe is in full GPS time, not TOW
+            # So we need to use full GPS time for comparison
+            dt_raw = t_gps - geph.toe
 
             # For GLONASS, prefer past ephemeris (dt_raw >= 0)
             # Add small penalty for future ephemeris
@@ -164,8 +174,8 @@ def eph2clk(t, eph):
 
     Parameters
     ----------
-    t : float
-        Time in seconds:
+    t : float or TimeCore
+        Time in seconds or TimeCore object:
         - For GLONASS: Full GPS time
         - For others: Time of week (GPS TOW)
         - For BeiDou: Will be converted to BDT internally
@@ -177,11 +187,31 @@ def eph2clk(t, eph):
     float
         Satellite clock bias (seconds) in GPS time system
     """
+    # Handle TimeCore input
+    if hasattr(t, 'get_tow'):
+        # It's a TimeCore object
+        t_tow = t.get_tow()
+        t_gps = t.get_gps_seconds()
+    else:
+        # It's a float - could be TOW or GPS seconds
+        if t > 604800:
+            t_tow = t % 604800
+            t_gps = t
+        else:
+            t_tow = t
+            # For GLONASS we need full GPS time
+            if hasattr(eph, 'taun'):  # GLONASS
+                # Estimate week from ephemeris toe
+                week = int(eph.toe // 604800)
+                t_gps = week * 604800 + t
+            else:
+                t_gps = t
+    
     # Check if this is GLONASS ephemeris
     if hasattr(eph, 'taun'):  # GLONASS ephemeris
         # GLONASS clock model: dts = -taun + gamn * (t - toe)
         # Both t and eph.toe are full GPS time
-        ts = t - eph.toe
+        ts = t_gps - eph.toe
 
         # Limit time difference
         if abs(ts) > 3600.0:  # 1 hour for GLONASS
@@ -197,8 +227,8 @@ def eph2clk(t, eph):
 
     # Regular ephemeris (GPS, Galileo, BeiDou, QZSS)
     # Time difference from time of clock
-    # Convert to time of week if needed
-    t_week = t % 604800 if t > 604800 else t
+    # Use TOW for non-GLONASS systems
+    t_week = t_tow
 
     # Get satellite system
     sys = sat2sys(eph.sat)
@@ -230,8 +260,8 @@ def eph2pos(t, eph):
 
     Parameters
     ----------
-    t : float
-        Time in seconds:
+    t : float or TimeCore
+        Time in seconds or TimeCore object:
         - For GLONASS: Full GPS time
         - For GPS/QZSS/Galileo: Time of week (GPS TOW)
         - For BeiDou: GPS TOW (will be converted to BDT internally)
@@ -247,11 +277,33 @@ def eph2pos(t, eph):
     dts : float
         Satellite clock bias (s) in GPS time system
     """
+    # Handle TimeCore input
+    if hasattr(t, 'get_tow'):
+        # It's a TimeCore object
+        t_tow = t.get_tow()
+        t_gps = t.get_gps_seconds()
+    else:
+        # It's a float - could be TOW or GPS seconds
+        if t > 604800:
+            t_tow = t % 604800
+            t_gps = t
+        else:
+            t_tow = t
+            # For GLONASS we need full GPS time, try to reconstruct it
+            # This is a fallback - ideally TimeCore should be used
+            if hasattr(eph, 'taun'):  # GLONASS
+                # Estimate week from ephemeris toe
+                week = int(eph.toe // 604800)
+                t_gps = week * 604800 + t
+            else:
+                t_gps = t
+    
     # Check if this is GLONASS ephemeris
     if hasattr(eph, 'taun'):  # GLONASS ephemeris
         # Import and use the geph2pos function from satellite.ephemeris module
         from ..satellite.ephemeris import geph2pos
-        rs, var, dts = geph2pos(eph, t)
+        # GLONASS needs full GPS time
+        rs, var, dts = geph2pos(eph, t_gps)
         return rs, var, dts
 
     # Get system-specific constants
@@ -268,8 +320,8 @@ def eph2pos(t, eph):
         omge = OMGE
 
     # Time from ephemeris reference epoch
-    # Convert to time of week if needed
-    t_week = t % 604800 if t > 604800 else t
+    # Use TOW for non-GLONASS systems
+    t_week = t_tow
 
     # For BeiDou, convert GPS TOW to BDT TOW
     if sys == SYS_BDS:
