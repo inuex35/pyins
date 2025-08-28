@@ -99,7 +99,7 @@ class RTKAmbiguityManager:
     def search_ambiguities(self, a_float: np.ndarray, Q_a: np.ndarray, 
                           n_candidates: int = 2) -> List[Tuple[np.ndarray, float]]:
         """
-        Search for integer ambiguity candidates
+        Search for integer ambiguity candidates using MLAMBDA
         
         Parameters
         ----------
@@ -115,34 +115,222 @@ class RTKAmbiguityManager:
         candidates : List[Tuple[np.ndarray, float]]
             List of (integer ambiguities, residual norm) sorted by residual
         """
+        # Use MLAMBDA for more robust search
+        return self.mlambda_search(a_float, Q_a, n_candidates)
+    
+    def mlambda_search(self, a_float: np.ndarray, Q_a: np.ndarray, 
+                      n_max: int = 2, chi2_init: Optional[float] = None) -> List[Tuple[np.ndarray, float]]:
+        """
+        Modified LAMBDA (MLAMBDA) integer least squares search
+        
+        This implements the efficient integer search algorithm from:
+        Chang X-W, Yang X, Zhou T (2005) MLAMBDA: a modified LAMBDA method for 
+        integer least-squares estimation. J Geod 79:552-565
+        
+        Parameters
+        ----------
+        a_float : np.ndarray
+            Float ambiguity vector (n,)
+        Q_a : np.ndarray
+            Covariance matrix (n x n)
+        n_max : int
+            Maximum number of candidates to find
+            
+        Returns
+        -------
+        candidates : List[Tuple[np.ndarray, float]]
+            List of integer candidates with their residuals
+        """
         n = len(a_float)
         
-        # Simple rounding for demonstration
-        # In practice, use more sophisticated search (e.g., MLAMBDA)
+        # LtDL decomposition of Q_a
+        L, D, Z, zt = self._ltdl_decomp(Q_a, a_float)
+        
+        # Initialize search
         candidates = []
         
-        # Best integer (rounding)
-        a_int_best = np.round(a_float).astype(int)
-        residual_best = self._compute_residual_norm(a_float, a_int_best, Q_a)
-        candidates.append((a_int_best, residual_best))
+        # Calculate better initial search radius using chi-square distribution
+        # For n_max candidates, we want high probability of finding them
+        # Use bootstrapping estimate based on covariance
+        if n_max == 2:
+            # For ratio test, need at least 2 candidates
+            # Start with larger radius to ensure we find multiple candidates
+            chi2_max = max(n * 3.0, 20.0)  # Chi-square with high confidence
+        else:
+            chi2_max = max(n * 2.0, 10.0)
         
-        # Second best (try different combinations near the float solution)
-        for i in range(n):
-            a_int_alt = a_int_best.copy()
+        # Alternative: compute initial radius from rounded solution
+        z_round = np.round(zt).astype(int)
+        initial_dist = np.sum((zt - z_round)**2 / D)
+        chi2_max = max(chi2_max, initial_dist * 10)  # Ensure we search wide enough
+        
+        # Search tree parameters
+        S = np.zeros((n, n))  # Partial sums
+        dist = np.zeros(n)    # Partial distances
+        zb = np.zeros(n, dtype=int)  # Integer candidates
+        z = np.zeros(n)       # Current search point
+        step = np.zeros(n, dtype=int)  # Search steps
+        
+        # Initialize first level
+        k = n - 1
+        dist[k] = 0
+        zb[k] = round(zt[k])
+        z[k] = zt[k] - zb[k]
+        step[k] = 1 if z[k] < 0 else -1
+        
+        # Main search loop
+        n_found = 0
+        max_iter = 10000  # Prevent infinite loops
+        iter_count = 0
+        
+        while n_found < n_max and iter_count < max_iter:
+            iter_count += 1
             
-            # Try next integer
-            if a_float[i] - a_int_best[i] > 0:
-                a_int_alt[i] += 1
+            # Compute partial distance
+            new_dist = dist[k] + z[k]**2 / D[k]
+            
+            if new_dist < chi2_max:
+                # Move down in search tree
+                if k > 0:
+                    # Compute partial sums
+                    for i in range(k):
+                        S[k-1, i] = S[k, i] + z[k] * L[k, i]
+                    
+                    dist[k-1] = new_dist
+                    k -= 1
+                    
+                    # Compute next level
+                    zb[k] = round(zt[k] + S[k, k])
+                    z[k] = zt[k] + S[k, k] - zb[k]
+                    step[k] = 1 if z[k] < 0 else -1
+                else:
+                    # Found a candidate at bottom level
+                    if n_found < n_max:
+                        # Store candidate
+                        candidate_z = zb.copy()
+                        # Transform back to original space
+                        candidate_a = Z @ candidate_z
+                        residual = new_dist
+                        candidates.append((candidate_a.astype(int), residual))
+                        n_found += 1
+                        
+                        # Update search radius for shrinking (key optimization)
+                        if n_found >= 2:
+                            # Shrink search space to focus on better candidates
+                            candidates.sort(key=lambda x: x[1])
+                            if n_found >= n_max:
+                                # Keep only best n_max candidates
+                                candidates = candidates[:n_max]
+                                chi2_max = candidates[-1][1] * 1.0001  # Small margin
+                            else:
+                                # Adaptively shrink based on found candidates
+                                chi2_max = min(chi2_max, candidates[-1][1] * 2.0)
+                    
+                    # Move to next integer at bottom level
+                    zb[0] += step[0]
+                    z[0] = zt[0] + S[0, 0] - zb[0]
+                    step[0] = -step[0] - (1 if step[0] > 0 else -1)
             else:
-                a_int_alt[i] -= 1
-            
-            residual_alt = self._compute_residual_norm(a_float, a_int_alt, Q_a)
-            candidates.append((a_int_alt, residual_alt))
+                # Move up in search tree
+                if k == n - 1:
+                    break  # Finished search
+                else:
+                    k += 1
+                    # Move to next integer
+                    zb[k] += step[k]
+                    z[k] = zt[k] + S[k, k] - zb[k]
+                    step[k] = -step[k] - (1 if step[k] > 0 else -1)
         
-        # Sort by residual norm
+        # Sort candidates by residual
         candidates.sort(key=lambda x: x[1])
         
-        return candidates[:n_candidates]
+        # If no candidates found, use simple rounding as fallback
+        if len(candidates) == 0:
+            a_int = np.round(a_float).astype(int)
+            residual = self._compute_residual_norm(a_float, a_int, Q_a)
+            candidates.append((a_int, residual))
+            
+            # Add second best by perturbing worst dimension
+            if n_max > 1:
+                variances = np.diag(Q_a)
+                worst_idx = np.argmax(variances)
+                a_int2 = a_int.copy()
+                if a_float[worst_idx] - a_int[worst_idx] > 0:
+                    a_int2[worst_idx] += 1
+                else:
+                    a_int2[worst_idx] -= 1
+                residual2 = self._compute_residual_norm(a_float, a_int2, Q_a)
+                candidates.append((a_int2, residual2))
+                candidates.sort(key=lambda x: x[1])
+        
+        return candidates[:n_max]
+    
+    def _ltdl_decomp(self, Q: np.ndarray, a: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        LtDL decomposition with decorrelation for MLAMBDA
+        
+        Returns L (unit lower triangular), D (diagonal), 
+        Z (transformation matrix), and transformed ambiguities
+        """
+        n = len(a)
+        L = np.eye(n)
+        D = np.zeros(n)
+        Z = np.eye(n)
+        
+        # Copy Q to avoid modifying
+        Q_work = Q.copy()
+        
+        # LDL factorization
+        for i in range(n):
+            D[i] = Q_work[i, i]
+            for j in range(i+1, n):
+                L[j, i] = Q_work[j, i] / D[i]
+                for k in range(j, n):
+                    Q_work[k, j] -= L[k, i] * L[j, i] * D[i]
+        
+        # Decorrelation (partial pivoting)
+        k = n - 2
+        while k >= 0:
+            k_old = k
+            for i in range(k, -1, -1):
+                # Check if swap would reduce correlation
+                if abs(L[i+1, i]) > 0.5:
+                    # Integer rounding to reduce correlation
+                    delta = round(L[i+1, i])
+                    L[i+1, i] -= delta
+                    Z[:, i+1] -= delta * Z[:, i]
+                    for j in range(i):
+                        L[i+1, j] -= delta * L[i, j]
+                    
+                # Check if swap would help
+                if D[i] > 2 * D[i+1]:
+                    # Swap columns i and i+1
+                    D[i], D[i+1] = D[i+1], D[i]
+                    Z[:, [i, i+1]] = Z[:, [i+1, i]]
+                    
+                    # Update L
+                    for j in range(i):
+                        L[i, j], L[i+1, j] = L[i+1, j], L[i, j]
+                    
+                    lambda_val = L[i+1, i]
+                    eta = D[i] / D[i+1]
+                    L[i+1, i] = eta * L[i+1, i]
+                    
+                    for j in range(i+2, n):
+                        temp = L[j, i]
+                        L[j, i] = L[j, i+1] - lambda_val * temp
+                        L[j, i+1] = temp + L[i+1, i] * L[j, i+1]
+                    
+                    k = i
+                    break
+            
+            if k == k_old:
+                k -= 1
+        
+        # Transform float ambiguities
+        zt = np.linalg.solve(Z.T, a)
+        
+        return L, D, Z, zt
     
     def _compute_residual_norm(self, a_float: np.ndarray, a_int: np.ndarray, 
                               Q_a: np.ndarray) -> float:
@@ -274,7 +462,9 @@ class RTKAmbiguityManager:
             Z = np.eye(len(a_float))
         
         # Search for integer candidates
-        candidates = self.search_ambiguities(a_decorr, Q_decorr)
+        # For better ratio test, search for more candidates
+        n_search = max(5, min(10, len(a_float)))  # Search for 5-10 candidates
+        candidates = self.search_ambiguities(a_decorr, Q_decorr, n_candidates=n_search)
         
         if len(candidates) == 0:
             logger.warning("No ambiguity candidates found")
