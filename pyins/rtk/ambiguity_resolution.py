@@ -4,24 +4,273 @@ Ambiguity Resolution for RTK Positioning
 =========================================
 
 This module implements integer ambiguity resolution algorithms for carrier phase
-positioning, including the LAMBDA (Least-squares AMBiguity Decorrelation Adjustment) method.
+positioning, using the LAMBDA (Least-squares AMBiguity Decorrelation Adjustment) method
+based on RTKLIB implementation.
+
+References:
+    [1] P.J.G.Teunissen, The least-square ambiguity decorrelation adjustment:
+        a method for fast GPS ambiguity estimation, J.Geodesy, Vol.70, 65-82, 1995
+    [2] X.-W.Chang, X.Yang, T.Zhou, MLAMBDA: A modified LAMBDA method for
+        integer least-squares estimation, J.Geodesy, Vol.79, 552-565, 2005
+
+Based on RTKLIB-py implementation by Rui Hirokawa and Tim Everett
 """
 
 import numpy as np
+from numpy.linalg import inv
 from typing import Tuple, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+def LD(Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    LD factorization (Q = L' * diag(D) * L)
+    
+    Parameters
+    ----------
+    Q : np.ndarray
+        Covariance matrix (n x n), must be positive definite
+        
+    Returns
+    -------
+    L : np.ndarray
+        Lower triangular matrix with ones on diagonal
+    d : np.ndarray
+        Diagonal values
+    """
+    n = len(Q)
+    L = np.zeros((n, n))
+    d = np.zeros(n)
+    A = Q.copy()
+    
+    for i in range(n-1, -1, -1):
+        d[i] = A[i, i]
+        if d[i] <= 0.0:
+            logger.warning(f'LD Factorization warning: non-positive diagonal element d[{i}]={d[i]:.6f}')
+            d[i] = 1e-6  # Small positive value to continue
+        
+        L[i, :i+1] = A[i, :i+1] / np.sqrt(d[i])
+        for j in range(i):
+            A[j, :j+1] -= L[i, :j+1] * L[i, j]
+        L[i, :i+1] /= L[i, i]
+    
+    return L, d
+
+
+def reduction(L: np.ndarray, d: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    LAMBDA reduction (z=Z'*a, Qz=Z'*Q*Z=L'*diag(D)*L) (ref.[1])
+    
+    Parameters
+    ----------
+    L : np.ndarray
+        Lower triangular matrix from LD factorization
+    d : np.ndarray
+        Diagonal values from LD factorization
+        
+    Returns
+    -------
+    L : np.ndarray
+        Reduced L matrix
+    d : np.ndarray
+        Reduced diagonal values
+    Z : np.ndarray
+        Transformation matrix
+    """
+    n = len(d)
+    Z = np.eye(n)
+    j = k = n - 2
+    
+    while j >= 0:
+        if j <= k:
+            # Integer Gauss transformation
+            for i in range(j+1, n):
+                mu = round(L[i, j])
+                if mu != 0:
+                    L[i:, j] -= mu * L[i:, i]
+                    Z[:, j] -= mu * Z[:, i]
+        
+        # Check if swap is beneficial
+        delta = d[j] + L[j+1, j]**2 * d[j+1]
+        if delta + 1e-6 < d[j+1]:  # Consider numerical error
+            # Perform swap
+            eta = d[j] / delta
+            lam = d[j+1] * L[j+1, j] / delta
+            d[j] = eta * d[j+1]
+            d[j+1] = delta
+            
+            # Update L matrix
+            L[j:j+2, :j] = np.array([[-L[j+1, j], 1], [eta, lam]]) @ L[j:j+2, :j]
+            L[j+1, j] = lam
+            
+            # Swap columns in L and Z
+            L[j+2:, j], L[j+2:, j+1] = L[j+2:, j+1].copy(), L[j+2:, j].copy()
+            Z[:, j], Z[:, j+1] = Z[:, j+1].copy(), Z[:, j].copy()
+            
+            j, k = n - 2, j
+        else:
+            j -= 1
+    
+    return L, d, Z
+
+
+def search(L: np.ndarray, d: np.ndarray, zs: np.ndarray, m: int = 2) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Modified LAMBDA (MLAMBDA) search (ref. [2])
+    
+    Parameters
+    ----------
+    L : np.ndarray
+        Reduced lower triangular matrix
+    d : np.ndarray
+        Reduced diagonal values
+    zs : np.ndarray
+        Transformed float ambiguities
+    m : int
+        Number of candidates to find
+        
+    Returns
+    -------
+    zn : np.ndarray
+        Integer candidates (n x m)
+    s : np.ndarray
+        Sum of squared residuals for each candidate
+    """
+    n = len(d)
+    nn = 0  # Number of candidates found
+    imax = 0  # Index of worst candidate
+    Chi2 = 1e18  # Initial search bound
+    
+    # Initialize arrays
+    S = np.zeros((n, n))  # Partial sums
+    dist = np.zeros(n)    # Partial distances
+    zb = np.zeros(n)      # Float values at each level
+    z = np.zeros(n)       # Integer candidates
+    step = np.zeros(n)    # Search step direction
+    zn = np.zeros((n, m)) # Final candidates
+    s = np.zeros(m)       # Residuals
+    
+    # Start from the last level
+    k = n - 1
+    zb[-1] = zs[-1]
+    z[-1] = round(zb[-1])
+    y = zb[-1] - z[-1]
+    step[-1] = np.sign(y) if y != 0 else 1
+    
+    # Main search loop
+    for iteration in range(10000):
+        # Compute partial distance
+        newdist = dist[k] + y**2 / d[k]
+        
+        if newdist < Chi2:
+            # Move down in search tree
+            if k != 0:
+                k -= 1
+                dist[k] = newdist
+                S[k, :k+1] = S[k+1, :k+1] + (z[k+1] - zb[k+1]) * L[k+1, :k+1]
+                zb[k] = zs[k] + S[k, k]
+                z[k] = round(zb[k])
+                y = zb[k] - z[k]
+                step[k] = np.sign(y) if y != 0 else 1
+            else:
+                # Found a candidate at bottom level
+                if nn < m:
+                    # Store first m candidates
+                    if nn == 0 or newdist > s[imax]:
+                        imax = nn
+                    zn[:, nn] = z
+                    s[nn] = newdist
+                    nn += 1
+                else:
+                    # Replace worst candidate if better
+                    if newdist < s[imax]:
+                        zn[:, imax] = z
+                        s[imax] = newdist
+                        imax = np.argmax(s)
+                    Chi2 = s[imax]  # Shrink search space
+                
+                # Move to next integer at bottom level
+                z[0] += step[0]
+                y = zb[0] - z[0]
+                step[0] = -step[0] - np.sign(step[0])
+        else:
+            # Move up in search tree
+            if k == n - 1:
+                break  # Finished search
+            k += 1
+            z[k] += step[k]
+            y = zb[k] - z[k]
+            step[k] = -step[k] - np.sign(step[k])
+    
+    # Sort candidates by residual
+    if nn > 0:
+        order = np.argsort(s[:nn])
+        s = s[order]
+        zn = zn[:, order]
+        return zn[:, :nn], s[:nn]
+    else:
+        # No candidates found (should not happen)
+        logger.warning("MLAMBDA search found no candidates")
+        return np.round(zs).reshape(-1, 1), np.array([0.0])
+
+
+def mlambda(a: np.ndarray, Q: np.ndarray, m: int = 2) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    LAMBDA/MLAMBDA integer least-squares estimation
+    
+    Integer least-squares estimation. Reduction is performed by LAMBDA (ref.[1]),
+    and search by MLAMBDA (ref.[2]).
+    
+    Parameters
+    ----------
+    a : np.ndarray
+        Float ambiguities (n x 1)
+    Q : np.ndarray
+        Covariance matrix of float ambiguities (n x n)
+    m : int
+        Number of candidates to return
+        
+    Returns
+    -------
+    afix : np.ndarray
+        Fixed integer candidates (n x m)
+    s : np.ndarray
+        Sum of squared residuals for each candidate
+    """
+    # LD factorization (Q = L' * diag(D) * L)
+    L, d = LD(Q)
+    
+    # Reduction/decorrelation
+    L, d, Z = reduction(L, d)
+    
+    # Transform float ambiguities
+    z = Z.T @ a
+    
+    # MLAMBDA search
+    E, s = search(L, d, z, m)
+    
+    # Transform back to original space
+    try:
+        invZt = np.round(inv(Z.T))
+        afix = invZt @ E
+    except:
+        logger.warning("Failed to invert transformation matrix, using direct transformation")
+        afix = Z @ E
+    
+    return afix.astype(int), s
+
+
 class RTKAmbiguityManager:
     """
-    Integer ambiguity resolution using LAMBDA method and validation
+    Integer ambiguity resolution using RTKLIB LAMBDA method and validation
     """
     
-    def __init__(self, ratio_threshold: float = 3.0, success_rate_threshold: float = 0.999):
+    def __init__(self, ratio_threshold: float = 3.0, success_rate_threshold: float = 0.999,
+                 min_sats: int = 4, max_position_var: float = 0.1):
         """
-        Initialize ambiguity resolver
+        Initialize ambiguity resolver with RTKLIB LAMBDA
         
         Parameters
         ----------
@@ -29,77 +278,27 @@ class RTKAmbiguityManager:
             Threshold for ratio test (second best / best solution)
         success_rate_threshold : float
             Required success rate for validation
+        min_sats : int
+            Minimum satellites for ambiguity resolution
+        max_position_var : float
+            Maximum position variance for attempting AR
         """
         self.ratio_threshold = ratio_threshold
         self.success_rate_threshold = success_rate_threshold
+        self.min_sats = min_sats
+        self.max_position_var = max_position_var
         self.fixed_ambiguities = {}
         self.ambiguity_covariance = None
         
-    def lambda_reduction(self, Q: np.ndarray, a: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        LAMBDA decorrelation and reduction
+        # State tracking for validation
+        self.prev_ratio = 0.0
+        self.prev_ratio2 = 0.0
+        self.nb_ar = 0  # Number of ambiguities resolved
         
-        Parameters
-        ----------
-        Q : np.ndarray
-            Covariance matrix of float ambiguities (n x n)
-        a : np.ndarray
-            Float ambiguity vector (n,)
-            
-        Returns
-        -------
-        Z : np.ndarray
-            Transformation matrix
-        L : np.ndarray
-            Diagonal of reduced covariance matrix
-        D : np.ndarray
-            Decorrelated ambiguities
-        """
-        n = len(a)
-        Z = np.eye(n)
-        L = Q.copy()
-        
-        # LDL decomposition
-        for i in range(n):
-            for j in range(i):
-                L[i, j] = L[i, j] / L[j, j]
-                for k in range(j):
-                    L[i, j] -= L[i, k] * L[j, k] * L[k, k] / L[j, j]
-            
-            for j in range(i):
-                L[i, i] -= L[i, j]**2 * L[j, j]
-        
-        # Extract D and L
-        D = np.diag(np.diag(L))
-        for i in range(n):
-            for j in range(i+1, n):
-                L[j, i] = 0
-        
-        # Decorrelation
-        k = n - 1
-        while k > 0:
-            k_old = k
-            for i in range(k, 0, -1):
-                if D[i-1, i-1] > D[i, i]:
-                    # Swap
-                    D[i-1, i-1], D[i, i] = D[i, i], D[i-1, i-1]
-                    Z[:, [i-1, i]] = Z[:, [i, i-1]]
-                    L[[i-1, i], :] = L[[i, i-1], :]
-                    L[:, [i-1, i]] = L[:, [i, i-1]]
-                    k = i
-            
-            if k == k_old:
-                k -= 1
-        
-        # Transform ambiguities
-        a_decorr = Z.T @ a
-        
-        return Z, np.diag(D), a_decorr
-    
     def search_ambiguities(self, a_float: np.ndarray, Q_a: np.ndarray, 
                           n_candidates: int = 2) -> List[Tuple[np.ndarray, float]]:
         """
-        Search for integer ambiguity candidates using MLAMBDA
+        Search for integer ambiguity candidates using RTKLIB MLAMBDA
         
         Parameters
         ----------
@@ -115,222 +314,15 @@ class RTKAmbiguityManager:
         candidates : List[Tuple[np.ndarray, float]]
             List of (integer ambiguities, residual norm) sorted by residual
         """
-        # Use MLAMBDA for more robust search
-        return self.mlambda_search(a_float, Q_a, n_candidates)
-    
-    def mlambda_search(self, a_float: np.ndarray, Q_a: np.ndarray, 
-                      n_max: int = 2, chi2_init: Optional[float] = None) -> List[Tuple[np.ndarray, float]]:
-        """
-        Modified LAMBDA (MLAMBDA) integer least squares search
+        # Use RTKLIB MLAMBDA
+        afix, s = mlambda(a_float, Q_a, m=n_candidates)
         
-        This implements the efficient integer search algorithm from:
-        Chang X-W, Yang X, Zhou T (2005) MLAMBDA: a modified LAMBDA method for 
-        integer least-squares estimation. J Geod 79:552-565
-        
-        Parameters
-        ----------
-        a_float : np.ndarray
-            Float ambiguity vector (n,)
-        Q_a : np.ndarray
-            Covariance matrix (n x n)
-        n_max : int
-            Maximum number of candidates to find
-            
-        Returns
-        -------
-        candidates : List[Tuple[np.ndarray, float]]
-            List of integer candidates with their residuals
-        """
-        n = len(a_float)
-        
-        # LtDL decomposition of Q_a
-        L, D, Z, zt = self._ltdl_decomp(Q_a, a_float)
-        
-        # Initialize search
+        # Convert to list of tuples for compatibility
         candidates = []
+        for i in range(afix.shape[1]):
+            candidates.append((afix[:, i], s[i]))
         
-        # Calculate better initial search radius using chi-square distribution
-        # For n_max candidates, we want high probability of finding them
-        # Use bootstrapping estimate based on covariance
-        if n_max == 2:
-            # For ratio test, need at least 2 candidates
-            # Start with larger radius to ensure we find multiple candidates
-            chi2_max = max(n * 3.0, 20.0)  # Chi-square with high confidence
-        else:
-            chi2_max = max(n * 2.0, 10.0)
-        
-        # Alternative: compute initial radius from rounded solution
-        z_round = np.round(zt).astype(int)
-        initial_dist = np.sum((zt - z_round)**2 / D)
-        chi2_max = max(chi2_max, initial_dist * 10)  # Ensure we search wide enough
-        
-        # Search tree parameters
-        S = np.zeros((n, n))  # Partial sums
-        dist = np.zeros(n)    # Partial distances
-        zb = np.zeros(n, dtype=int)  # Integer candidates
-        z = np.zeros(n)       # Current search point
-        step = np.zeros(n, dtype=int)  # Search steps
-        
-        # Initialize first level
-        k = n - 1
-        dist[k] = 0
-        zb[k] = round(zt[k])
-        z[k] = zt[k] - zb[k]
-        step[k] = 1 if z[k] < 0 else -1
-        
-        # Main search loop
-        n_found = 0
-        max_iter = 10000  # Prevent infinite loops
-        iter_count = 0
-        
-        while n_found < n_max and iter_count < max_iter:
-            iter_count += 1
-            
-            # Compute partial distance
-            new_dist = dist[k] + z[k]**2 / D[k]
-            
-            if new_dist < chi2_max:
-                # Move down in search tree
-                if k > 0:
-                    # Compute partial sums
-                    for i in range(k):
-                        S[k-1, i] = S[k, i] + z[k] * L[k, i]
-                    
-                    dist[k-1] = new_dist
-                    k -= 1
-                    
-                    # Compute next level
-                    zb[k] = round(zt[k] + S[k, k])
-                    z[k] = zt[k] + S[k, k] - zb[k]
-                    step[k] = 1 if z[k] < 0 else -1
-                else:
-                    # Found a candidate at bottom level
-                    if n_found < n_max:
-                        # Store candidate
-                        candidate_z = zb.copy()
-                        # Transform back to original space
-                        candidate_a = Z @ candidate_z
-                        residual = new_dist
-                        candidates.append((candidate_a.astype(int), residual))
-                        n_found += 1
-                        
-                        # Update search radius for shrinking (key optimization)
-                        if n_found >= 2:
-                            # Shrink search space to focus on better candidates
-                            candidates.sort(key=lambda x: x[1])
-                            if n_found >= n_max:
-                                # Keep only best n_max candidates
-                                candidates = candidates[:n_max]
-                                chi2_max = candidates[-1][1] * 1.0001  # Small margin
-                            else:
-                                # Adaptively shrink based on found candidates
-                                chi2_max = min(chi2_max, candidates[-1][1] * 2.0)
-                    
-                    # Move to next integer at bottom level
-                    zb[0] += step[0]
-                    z[0] = zt[0] + S[0, 0] - zb[0]
-                    step[0] = -step[0] - (1 if step[0] > 0 else -1)
-            else:
-                # Move up in search tree
-                if k == n - 1:
-                    break  # Finished search
-                else:
-                    k += 1
-                    # Move to next integer
-                    zb[k] += step[k]
-                    z[k] = zt[k] + S[k, k] - zb[k]
-                    step[k] = -step[k] - (1 if step[k] > 0 else -1)
-        
-        # Sort candidates by residual
-        candidates.sort(key=lambda x: x[1])
-        
-        # If no candidates found, use simple rounding as fallback
-        if len(candidates) == 0:
-            a_int = np.round(a_float).astype(int)
-            residual = self._compute_residual_norm(a_float, a_int, Q_a)
-            candidates.append((a_int, residual))
-            
-            # Add second best by perturbing worst dimension
-            if n_max > 1:
-                variances = np.diag(Q_a)
-                worst_idx = np.argmax(variances)
-                a_int2 = a_int.copy()
-                if a_float[worst_idx] - a_int[worst_idx] > 0:
-                    a_int2[worst_idx] += 1
-                else:
-                    a_int2[worst_idx] -= 1
-                residual2 = self._compute_residual_norm(a_float, a_int2, Q_a)
-                candidates.append((a_int2, residual2))
-                candidates.sort(key=lambda x: x[1])
-        
-        return candidates[:n_max]
-    
-    def _ltdl_decomp(self, Q: np.ndarray, a: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        LtDL decomposition with decorrelation for MLAMBDA
-        
-        Returns L (unit lower triangular), D (diagonal), 
-        Z (transformation matrix), and transformed ambiguities
-        """
-        n = len(a)
-        L = np.eye(n)
-        D = np.zeros(n)
-        Z = np.eye(n)
-        
-        # Copy Q to avoid modifying
-        Q_work = Q.copy()
-        
-        # LDL factorization
-        for i in range(n):
-            D[i] = Q_work[i, i]
-            for j in range(i+1, n):
-                L[j, i] = Q_work[j, i] / D[i]
-                for k in range(j, n):
-                    Q_work[k, j] -= L[k, i] * L[j, i] * D[i]
-        
-        # Decorrelation (partial pivoting)
-        k = n - 2
-        while k >= 0:
-            k_old = k
-            for i in range(k, -1, -1):
-                # Check if swap would reduce correlation
-                if abs(L[i+1, i]) > 0.5:
-                    # Integer rounding to reduce correlation
-                    delta = round(L[i+1, i])
-                    L[i+1, i] -= delta
-                    Z[:, i+1] -= delta * Z[:, i]
-                    for j in range(i):
-                        L[i+1, j] -= delta * L[i, j]
-                    
-                # Check if swap would help
-                if D[i] > 2 * D[i+1]:
-                    # Swap columns i and i+1
-                    D[i], D[i+1] = D[i+1], D[i]
-                    Z[:, [i, i+1]] = Z[:, [i+1, i]]
-                    
-                    # Update L
-                    for j in range(i):
-                        L[i, j], L[i+1, j] = L[i+1, j], L[i, j]
-                    
-                    lambda_val = L[i+1, i]
-                    eta = D[i] / D[i+1]
-                    L[i+1, i] = eta * L[i+1, i]
-                    
-                    for j in range(i+2, n):
-                        temp = L[j, i]
-                        L[j, i] = L[j, i+1] - lambda_val * temp
-                        L[j, i+1] = temp + L[i+1, i] * L[j, i+1]
-                    
-                    k = i
-                    break
-            
-            if k == k_old:
-                k -= 1
-        
-        # Transform float ambiguities
-        zt = np.linalg.solve(Z.T, a)
-        
-        return L, D, Z, zt
+        return candidates
     
     def _compute_residual_norm(self, a_float: np.ndarray, a_int: np.ndarray, 
                               Q_a: np.ndarray) -> float:
@@ -375,6 +367,10 @@ class RTKAmbiguityManager:
         ratio = second_best_residual / best_residual
         passed = ratio >= self.ratio_threshold
         
+        # Update tracking
+        self.prev_ratio2 = self.prev_ratio
+        self.prev_ratio = ratio
+        
         return passed, ratio
     
     def success_rate_test(self, Q_a: np.ndarray, ratio: float) -> Tuple[bool, float]:
@@ -395,11 +391,10 @@ class RTKAmbiguityManager:
         success_rate : float
             Estimated success rate
         """
-        # Simplified success rate estimation
-        # In practice, use more sophisticated methods (e.g., based on bootstrapping)
+        # Simplified success rate estimation based on ratio and dimension
         n = Q_a.shape[0]
         
-        # Estimate based on ratio and dimension
+        # Estimate based on ratio
         if ratio > 3.0:
             success_rate = 0.999
         elif ratio > 2.5:
@@ -419,7 +414,7 @@ class RTKAmbiguityManager:
     def resolve(self, a_float: np.ndarray, Q_a: np.ndarray, 
                 wavelengths: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], dict]:
         """
-        Full ambiguity resolution pipeline
+        Full ambiguity resolution pipeline using RTKLIB LAMBDA
         
         Parameters
         ----------
@@ -443,7 +438,8 @@ class RTKAmbiguityManager:
             'success_rate': 0.0,
             'passed_ratio': False,
             'passed_success_rate': False,
-            'fixed': False
+            'fixed': False,
+            'method': 'RTKLIB-LAMBDA'
         }
         
         # Check input validity
@@ -451,20 +447,22 @@ class RTKAmbiguityManager:
             logger.warning("Invalid input dimensions for ambiguity resolution")
             return None, info
         
-        # Decorrelate (optional but improves search)
-        try:
-            Z, D, a_decorr = self.lambda_reduction(Q_a, a_float)
-            Q_decorr = np.diag(D)
-        except:
-            # If decorrelation fails, use original
-            a_decorr = a_float
-            Q_decorr = Q_a
-            Z = np.eye(len(a_float))
+        # Check minimum satellites
+        if len(a_float) < self.min_sats - 1:  # -1 for reference satellite
+            logger.debug(f"Not enough ambiguities: {len(a_float)} < {self.min_sats-1}")
+            return None, info
         
-        # Search for integer candidates
-        # For better ratio test, search for more candidates
-        n_search = max(5, min(10, len(a_float)))  # Search for 5-10 candidates
-        candidates = self.search_ambiguities(a_decorr, Q_decorr, n_candidates=n_search)
+        # Search for integer candidates using RTKLIB MLAMBDA
+        try:
+            # Search for more candidates for better ratio testing
+            n_search = max(5, min(10, len(a_float)))
+            afix, residuals = mlambda(a_float, Q_a, m=n_search)
+            
+            # Convert to candidates format for compatibility
+            candidates = [(afix[:, i], residuals[i]) for i in range(afix.shape[1])]
+        except Exception as e:
+            logger.warning(f"MLAMBDA search failed: {e}")
+            return None, info
         
         if len(candidates) == 0:
             logger.warning("No ambiguity candidates found")
@@ -488,9 +486,8 @@ class RTKAmbiguityManager:
             logger.debug(f"Success rate test failed: {success_rate:.3f} < {self.success_rate_threshold}")
             return None, info
         
-        # Transform back to original space
-        a_fixed_decorr = candidates[0][0]
-        a_fixed = Z @ a_fixed_decorr
+        # Get best candidate
+        a_fixed = candidates[0][0]
         
         # Final validation
         if wavelengths is not None:
@@ -501,6 +498,7 @@ class RTKAmbiguityManager:
                 return None, info
         
         info['fixed'] = True
+        self.nb_ar = len(a_float)
         logger.info(f"Ambiguities fixed successfully: ratio={ratio:.2f}, success_rate={success_rate:.3f}")
         
         return a_fixed.astype(int), info
@@ -532,20 +530,28 @@ class RTKAmbiguityManager:
         
         # Sort by variance (diagonal of covariance)
         variances = np.diag(Q_a)
-        sorted_indices = np.argsort(variances)
+        sorted_idx = np.argsort(variances)
         
-        # Try to fix ambiguities starting from most precise
-        for idx in sorted_indices:
-            if variances[idx] > 0.5:  # Too uncertain
-                continue
+        # Try fixing subsets starting with most precise
+        for subset_size in range(n, max(self.min_sats-2, 2), -1):
+            subset = sorted_idx[:subset_size]
             
-            # Try fixing this ambiguity
-            a_test = a_float.copy()
-            a_test[idx] = np.round(a_float[idx])
+            # Extract subset
+            a_subset = a_float[subset]
+            Q_subset = Q_a[np.ix_(subset, subset)]
             
-            # Simple validation
-            if np.abs(a_float[idx] - a_test[idx]) < 0.25:  # Close to integer
-                fixed_mask[idx] = True
-                a_partial[idx] = a_test[idx]
+            # Try to fix subset with relaxed threshold
+            saved_threshold = self.ratio_threshold
+            self.ratio_threshold = min_ratio
+            
+            a_fixed, info = self.resolve(a_subset, Q_subset)
+            
+            self.ratio_threshold = saved_threshold
+            
+            if info['fixed'] and info['ratio'] >= min_ratio:
+                fixed_mask[subset] = True
+                a_partial[subset] = a_fixed
+                logger.info(f"Partial fix: {subset_size}/{n} ambiguities, ratio={info['ratio']:.2f}")
+                break
         
         return fixed_mask, a_partial
