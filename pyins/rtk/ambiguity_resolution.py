@@ -1,364 +1,361 @@
-# Copyright 2024 inuex35
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+#!/usr/bin/env python3
+"""
+Ambiguity Resolution for RTK Positioning
+=========================================
 
-"""Ambiguity resolution for RTK using LAMBDA method"""
-
-from typing import Optional
+This module implements integer ambiguity resolution algorithms for carrier phase
+positioning, including the LAMBDA (Least-squares AMBiguity Decorrelation Adjustment) method.
+"""
 
 import numpy as np
+from typing import Tuple, List, Optional
+import logging
 
-from ..utils.ambiguity import lambda_reduction, lambda_search
-
-
-class AmbiguityResolver:
-    """Integer ambiguity resolution using LAMBDA method"""
-
-    def __init__(self,
-                 ratio_threshold: float = 3.0,
-                 success_rate_threshold: float = 0.999):
-        """
-        Initialize ambiguity resolver
-
-        Parameters:
-        -----------
-        ratio_threshold : float
-            Minimum ratio test threshold
-        success_rate_threshold : float
-            Minimum success rate for fixing
-        """
-        self.ratio_threshold = ratio_threshold
-        self.success_rate_threshold = success_rate_threshold
-
-    def resolve_ambiguities(self,
-                           float_ambiguities: np.ndarray,
-                           covariance_matrix: np.ndarray) -> tuple[Optional[np.ndarray], float, bool]:
-        """
-        Resolve integer ambiguities using LAMBDA method
-
-        Parameters:
-        -----------
-        float_ambiguities : np.ndarray
-            Float ambiguity estimates
-        covariance_matrix : np.ndarray
-            Ambiguity covariance matrix
-
-        Returns:
-        --------
-        fixed_ambiguities : np.ndarray or None
-            Fixed integer ambiguities (None if fixing failed)
-        ratio : float
-            Ratio test value
-        success : bool
-            Whether ambiguity fixing was successful
-        """
-        n = len(float_ambiguities)
-        if n == 0:
-            return None, 0.0, False
-
-        try:
-            # LAMBDA reduction
-            Z, L, D = lambda_reduction(covariance_matrix)
-
-            # Transform float solution
-            transformed_float = Z.T @ float_ambiguities
-
-            # Integer search
-            candidates, residuals = lambda_search(transformed_float, L, D, ncands=2)
-
-            if len(candidates) < 2:
-                return None, 0.0, False
-
-            # Ratio test
-            ratio = residuals[1] / residuals[0] if residuals[0] > 0 else 0.0
-
-            # Success rate estimation
-            success_rate = self._estimate_success_rate(residuals[0], residuals[1], n)
-
-            # Check fixing criteria
-            fixing_success = (ratio >= self.ratio_threshold and
-                            success_rate >= self.success_rate_threshold)
-
-            if fixing_success:
-                # Transform back to original space
-                fixed_ambiguities = Z @ candidates[0]
-                return fixed_ambiguities.astype(int), ratio, True
-            else:
-                return None, ratio, False
-
-        except Exception as e:
-            print(f"Ambiguity resolution failed: {e}")
-            # Return failure instead of raising
-            return None, 0.0, False
-
-    def _estimate_success_rate(self,
-                             min_residual: float,
-                             second_residual: float,
-                             n_amb: int) -> float:
-        """
-        Estimate success rate using bootstrapping approximation
-
-        Parameters:
-        -----------
-        min_residual : float
-            Minimum residual
-        second_residual : float
-            Second minimum residual
-        n_amb : int
-            Number of ambiguities
-
-        Returns:
-        --------
-        success_rate : float
-            Estimated success rate
-        """
-        if min_residual <= 0 or second_residual <= min_residual:
-            return 0.0
-
-        # Simplified bootstrapping success rate
-        # Based on ratio of residuals and number of ambiguities
-        ratio = second_residual / min_residual
-
-        # Empirical formula (simplified)
-        if ratio < 1.5:
-            return 0.1
-        elif ratio < 2.0:
-            return 0.5
-        elif ratio < 3.0:
-            return 0.9
-        else:
-            return min(0.999, 1.0 - np.exp(-ratio / 2.0))
-
-    def partial_ambiguity_resolution(self,
-                                   float_ambiguities: np.ndarray,
-                                   covariance_matrix: np.ndarray,
-                                   min_subset_size: int = 2) -> tuple[Optional[np.ndarray], np.ndarray, float]:
-        """
-        Partial ambiguity resolution - fix subset of most reliable ambiguities
-
-        Parameters:
-        -----------
-        float_ambiguities : np.ndarray
-            Float ambiguity estimates
-        covariance_matrix : np.ndarray
-            Ambiguity covariance matrix
-        min_subset_size : int
-            Minimum subset size to attempt fixing
-
-        Returns:
-        --------
-        fixed_subset : np.ndarray or None
-            Fixed ambiguities for selected subset
-        subset_indices : np.ndarray
-            Indices of selected subset
-        ratio : float
-            Ratio test value for subset
-        """
-        n = len(float_ambiguities)
-        if n < min_subset_size:
-            return None, np.array([]), 0.0
-
-        best_ratio = 0.0
-        best_fixed = None
-        best_indices = np.array([])
-
-        # Try different subset sizes, starting from largest
-        for subset_size in range(n, min_subset_size - 1, -1):
-            # Select subset based on diagonal covariance (most precise)
-            diag_cov = np.diag(covariance_matrix)
-            indices = np.argsort(diag_cov)[:subset_size]
-
-            # Extract subset
-            subset_float = float_ambiguities[indices]
-            subset_cov = covariance_matrix[np.ix_(indices, indices)]
-
-            # Try to resolve subset
-            fixed_subset, ratio, success = self.resolve_ambiguities(subset_float, subset_cov)
-
-            if success and ratio > best_ratio:
-                best_ratio = ratio
-                best_fixed = fixed_subset
-                best_indices = indices
-                break  # Use largest successful subset
-
-        return best_fixed, best_indices, best_ratio
-
-
-class WidelaneAmbiguityResolver:
-    """Widelane ambiguity resolution for dual-frequency RTK"""
-
-    def __init__(self):
-        self.l1_freq = 1575.42e6
-        self.l2_freq = 1227.60e6
-        self.wl_wavelength = 299792458.0 / (self.l1_freq - self.l2_freq)  # ~86 cm
-
-    def resolve_widelane(self,
-                        l1_observations: np.ndarray,
-                        l2_observations: np.ndarray,
-                        l1_pseudorange: np.ndarray,
-                        l2_pseudorange: np.ndarray) -> np.ndarray:
-        """
-        Resolve widelane ambiguities using Melbourne-Wubbena combination
-
-        Parameters:
-        -----------
-        l1_observations : np.ndarray
-            L1 carrier phase observations (cycles)
-        l2_observations : np.ndarray
-            L2 carrier phase observations (cycles)
-        l1_pseudorange : np.ndarray
-            L1 pseudorange observations (m)
-        l2_pseudorange : np.ndarray
-            L2 pseudorange observations (m)
-
-        Returns:
-        --------
-        widelane_ambiguities : np.ndarray
-            Resolved widelane ambiguities
-        """
-        299792458.0 / self.l1_freq
-        299792458.0 / self.l2_freq
-
-        # Melbourne-Wubbena combination
-        mw_combination = (l1_observations - l2_observations) - (
-            (self.l1_freq * l1_pseudorange - self.l2_freq * l2_pseudorange) /
-            (299792458.0 * (self.l1_freq - self.l2_freq))
-        )
-
-        # Round to nearest integer
-        widelane_ambiguities = np.round(mw_combination)
-
-        return widelane_ambiguities
-
-    def constrain_l1_ambiguities(self,
-                               l1_float: np.ndarray,
-                               l2_float: np.ndarray,
-                               widelane_fixed: np.ndarray) -> np.ndarray:
-        """
-        Constrain L1 ambiguities using fixed widelane ambiguities
-
-        Parameters:
-        -----------
-        l1_float : np.ndarray
-            L1 float ambiguities
-        l2_float : np.ndarray
-            L2 float ambiguities
-        widelane_fixed : np.ndarray
-            Fixed widelane ambiguities
-
-        Returns:
-        --------
-        l2_constrained : np.ndarray
-            L2 ambiguities constrained by widelane
-        """
-        # L2 = L1 - widelane
-        l2_constrained = l1_float - widelane_fixed
-
-        return l2_constrained
+logger = logging.getLogger(__name__)
 
 
 class RTKAmbiguityManager:
-    """Manage ambiguities for RTK processing"""
-
-    def __init__(self):
-        self.resolver = AmbiguityResolver()
-        self.wl_resolver = WidelaneAmbiguityResolver()
-        self.fixed_ambiguities = {}  # sat -> ambiguity
-        self.ambiguity_history = {}  # sat -> list of estimates
-        self.fix_status = {}  # sat -> bool
-
-    def update_ambiguities(self,
-                          satellites: list[int],
-                          float_estimates: np.ndarray,
-                          covariance: np.ndarray) -> tuple[dict[int, int], dict[int, bool]]:
+    """
+    Integer ambiguity resolution using LAMBDA method and validation
+    """
+    
+    def __init__(self, ratio_threshold: float = 3.0, success_rate_threshold: float = 0.999):
         """
-        Update and resolve ambiguities
-
-        Parameters:
-        -----------
-        satellites : List[int]
-            Satellite numbers
-        float_estimates : np.ndarray
+        Initialize ambiguity resolver
+        
+        Parameters
+        ----------
+        ratio_threshold : float
+            Threshold for ratio test (second best / best solution)
+        success_rate_threshold : float
+            Required success rate for validation
+        """
+        self.ratio_threshold = ratio_threshold
+        self.success_rate_threshold = success_rate_threshold
+        self.fixed_ambiguities = {}
+        self.ambiguity_covariance = None
+        
+    def lambda_reduction(self, Q: np.ndarray, a: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        LAMBDA decorrelation and reduction
+        
+        Parameters
+        ----------
+        Q : np.ndarray
+            Covariance matrix of float ambiguities (n x n)
+        a : np.ndarray
+            Float ambiguity vector (n,)
+            
+        Returns
+        -------
+        Z : np.ndarray
+            Transformation matrix
+        L : np.ndarray
+            Diagonal of reduced covariance matrix
+        D : np.ndarray
+            Decorrelated ambiguities
+        """
+        n = len(a)
+        Z = np.eye(n)
+        L = Q.copy()
+        
+        # LDL decomposition
+        for i in range(n):
+            for j in range(i):
+                L[i, j] = L[i, j] / L[j, j]
+                for k in range(j):
+                    L[i, j] -= L[i, k] * L[j, k] * L[k, k] / L[j, j]
+            
+            for j in range(i):
+                L[i, i] -= L[i, j]**2 * L[j, j]
+        
+        # Extract D and L
+        D = np.diag(np.diag(L))
+        for i in range(n):
+            for j in range(i+1, n):
+                L[j, i] = 0
+        
+        # Decorrelation
+        k = n - 1
+        while k > 0:
+            k_old = k
+            for i in range(k, 0, -1):
+                if D[i-1, i-1] > D[i, i]:
+                    # Swap
+                    D[i-1, i-1], D[i, i] = D[i, i], D[i-1, i-1]
+                    Z[:, [i-1, i]] = Z[:, [i, i-1]]
+                    L[[i-1, i], :] = L[[i, i-1], :]
+                    L[:, [i-1, i]] = L[:, [i, i-1]]
+                    k = i
+            
+            if k == k_old:
+                k -= 1
+        
+        # Transform ambiguities
+        a_decorr = Z.T @ a
+        
+        return Z, np.diag(D), a_decorr
+    
+    def search_ambiguities(self, a_float: np.ndarray, Q_a: np.ndarray, 
+                          n_candidates: int = 2) -> List[Tuple[np.ndarray, float]]:
+        """
+        Search for integer ambiguity candidates
+        
+        Parameters
+        ----------
+        a_float : np.ndarray
             Float ambiguity estimates
-        covariance : np.ndarray
-            Ambiguity covariance matrix
-
-        Returns:
-        --------
-        ambiguities : Dict[int, int]
-            Fixed ambiguities by satellite
-        fix_status : Dict[int, bool]
-            Fix status by satellite
+        Q_a : np.ndarray
+            Covariance matrix of float ambiguities
+        n_candidates : int
+            Number of candidates to return
+            
+        Returns
+        -------
+        candidates : List[Tuple[np.ndarray, float]]
+            List of (integer ambiguities, residual norm) sorted by residual
         """
-        # Try full resolution first
-        fixed, ratio, success = self.resolver.resolve_ambiguities(
-            float_estimates, covariance)
-
-        if success:
-            # Update all ambiguities
-            for i, sat in enumerate(satellites):
-                self.fixed_ambiguities[sat] = int(fixed[i])
-                self.fix_status[sat] = True
+        n = len(a_float)
+        
+        # Simple rounding for demonstration
+        # In practice, use more sophisticated search (e.g., MLAMBDA)
+        candidates = []
+        
+        # Best integer (rounding)
+        a_int_best = np.round(a_float).astype(int)
+        residual_best = self._compute_residual_norm(a_float, a_int_best, Q_a)
+        candidates.append((a_int_best, residual_best))
+        
+        # Second best (try different combinations near the float solution)
+        for i in range(n):
+            a_int_alt = a_int_best.copy()
+            
+            # Try next integer
+            if a_float[i] - a_int_best[i] > 0:
+                a_int_alt[i] += 1
+            else:
+                a_int_alt[i] -= 1
+            
+            residual_alt = self._compute_residual_norm(a_float, a_int_alt, Q_a)
+            candidates.append((a_int_alt, residual_alt))
+        
+        # Sort by residual norm
+        candidates.sort(key=lambda x: x[1])
+        
+        return candidates[:n_candidates]
+    
+    def _compute_residual_norm(self, a_float: np.ndarray, a_int: np.ndarray, 
+                              Q_a: np.ndarray) -> float:
+        """
+        Compute quadratic form residual norm
+        
+        ||a_float - a_int||²_Q = (a_float - a_int)^T * Q_a^-1 * (a_float - a_int)
+        """
+        diff = a_float - a_int
+        try:
+            Q_inv = np.linalg.inv(Q_a)
+            return float(diff.T @ Q_inv @ diff)
+        except:
+            return float('inf')
+    
+    def ratio_test(self, candidates: List[Tuple[np.ndarray, float]]) -> Tuple[bool, float]:
+        """
+        Perform ratio test for ambiguity validation
+        
+        Parameters
+        ----------
+        candidates : List[Tuple[np.ndarray, float]]
+            Sorted list of ambiguity candidates with residuals
+            
+        Returns
+        -------
+        passed : bool
+            Whether ratio test passed
+        ratio : float
+            Ratio value (second best / best)
+        """
+        if len(candidates) < 2:
+            return False, 0.0
+        
+        best_residual = candidates[0][1]
+        second_best_residual = candidates[1][1]
+        
+        # Avoid division by zero
+        if best_residual < 1e-10:
+            return True, float('inf')
+        
+        ratio = second_best_residual / best_residual
+        passed = ratio >= self.ratio_threshold
+        
+        return passed, ratio
+    
+    def success_rate_test(self, Q_a: np.ndarray, ratio: float) -> Tuple[bool, float]:
+        """
+        Compute success rate based on covariance and ratio
+        
+        Parameters
+        ----------
+        Q_a : np.ndarray
+            Covariance matrix
+        ratio : float
+            Ratio test value
+            
+        Returns
+        -------
+        passed : bool
+            Whether success rate test passed
+        success_rate : float
+            Estimated success rate
+        """
+        # Simplified success rate estimation
+        # In practice, use more sophisticated methods (e.g., based on bootstrapping)
+        n = Q_a.shape[0]
+        
+        # Estimate based on ratio and dimension
+        if ratio > 3.0:
+            success_rate = 0.999
+        elif ratio > 2.5:
+            success_rate = 0.99
+        elif ratio > 2.0:
+            success_rate = 0.95
         else:
-            # Try partial resolution
-            fixed_subset, indices, ratio = self.resolver.partial_ambiguity_resolution(
-                float_estimates, covariance)
-
-            if fixed_subset is not None:
-                # Update subset
-                for i, idx in enumerate(indices):
-                    sat = satellites[idx]
-                    self.fixed_ambiguities[sat] = int(fixed_subset[i])
-                    self.fix_status[sat] = True
-
-                # Mark others as float
-                for i, sat in enumerate(satellites):
-                    if i not in indices:
-                        self.fix_status[sat] = False
-            else:
-                # All remain float
-                for sat in satellites:
-                    self.fix_status[sat] = False
-
-        return self.fixed_ambiguities.copy(), self.fix_status.copy()
-
-    def validate_ambiguities(self,
-                           satellites: list[int],
-                           residuals: np.ndarray,
-                           threshold: float = 0.1) -> dict[int, bool]:
+            success_rate = 0.5 + 0.25 * ratio
+        
+        # Adjust for dimension
+        success_rate = success_rate ** (1.0 / max(1, n/4))
+        
+        passed = success_rate >= self.success_rate_threshold
+        
+        return passed, success_rate
+    
+    def resolve(self, a_float: np.ndarray, Q_a: np.ndarray, 
+                wavelengths: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], dict]:
         """
-        Validate fixed ambiguities using residuals
-
-        Parameters:
-        -----------
-        satellites : List[int]
-            Satellite numbers
-        residuals : np.ndarray
-            Post-fix residuals
-        threshold : float
-            Residual threshold for validation
-
-        Returns:
-        --------
-        validation_status : Dict[int, bool]
-            Validation status by satellite
+        Full ambiguity resolution pipeline
+        
+        Parameters
+        ----------
+        a_float : np.ndarray
+            Float ambiguity estimates (in cycles)
+        Q_a : np.ndarray
+            Covariance matrix of float ambiguities
+        wavelengths : np.ndarray, optional
+            Wavelengths for each ambiguity (for validation)
+            
+        Returns
+        -------
+        a_fixed : np.ndarray or None
+            Fixed integer ambiguities, or None if failed
+        info : dict
+            Resolution information (ratio, success_rate, etc.)
         """
-        validation_status = {}
-
-        for i, sat in enumerate(satellites):
-            if i < len(residuals):
-                validation_status[sat] = abs(residuals[i]) < threshold
-            else:
-                validation_status[sat] = False
-
-        return validation_status
+        info = {
+            'n_ambiguities': len(a_float),
+            'ratio': 0.0,
+            'success_rate': 0.0,
+            'passed_ratio': False,
+            'passed_success_rate': False,
+            'fixed': False
+        }
+        
+        # Check input validity
+        if len(a_float) == 0 or Q_a.shape[0] != len(a_float):
+            logger.warning("Invalid input dimensions for ambiguity resolution")
+            return None, info
+        
+        # Decorrelate (optional but improves search)
+        try:
+            Z, D, a_decorr = self.lambda_reduction(Q_a, a_float)
+            Q_decorr = np.diag(D)
+        except:
+            # If decorrelation fails, use original
+            a_decorr = a_float
+            Q_decorr = Q_a
+            Z = np.eye(len(a_float))
+        
+        # Search for integer candidates
+        candidates = self.search_ambiguities(a_decorr, Q_decorr)
+        
+        if len(candidates) == 0:
+            logger.warning("No ambiguity candidates found")
+            return None, info
+        
+        # Ratio test
+        passed_ratio, ratio = self.ratio_test(candidates)
+        info['ratio'] = ratio
+        info['passed_ratio'] = passed_ratio
+        
+        if not passed_ratio:
+            logger.debug(f"Ratio test failed: {ratio:.2f} < {self.ratio_threshold}")
+            return None, info
+        
+        # Success rate test
+        passed_success, success_rate = self.success_rate_test(Q_a, ratio)
+        info['success_rate'] = success_rate
+        info['passed_success_rate'] = passed_success
+        
+        if not passed_success:
+            logger.debug(f"Success rate test failed: {success_rate:.3f} < {self.success_rate_threshold}")
+            return None, info
+        
+        # Transform back to original space
+        a_fixed_decorr = candidates[0][0]
+        a_fixed = Z @ a_fixed_decorr
+        
+        # Final validation
+        if wavelengths is not None:
+            # Check that ambiguities give reasonable position change
+            position_change = a_fixed * wavelengths
+            if np.any(np.abs(position_change) > 100):  # More than 100m change is suspicious
+                logger.warning("Ambiguity resolution resulted in unreasonable position change")
+                return None, info
+        
+        info['fixed'] = True
+        logger.info(f"Ambiguities fixed successfully: ratio={ratio:.2f}, success_rate={success_rate:.3f}")
+        
+        return a_fixed.astype(int), info
+    
+    def partial_ambiguity_resolution(self, a_float: np.ndarray, Q_a: np.ndarray,
+                                    min_ratio: float = 2.0) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Resolve subset of ambiguities with highest confidence
+        
+        Parameters
+        ----------
+        a_float : np.ndarray
+            Float ambiguities
+        Q_a : np.ndarray
+            Covariance matrix
+        min_ratio : float
+            Minimum ratio for partial fixing
+            
+        Returns
+        -------
+        fixed_mask : np.ndarray
+            Boolean mask of fixed ambiguities
+        a_partial : np.ndarray
+            Partially fixed ambiguities (float where not fixed)
+        """
+        n = len(a_float)
+        fixed_mask = np.zeros(n, dtype=bool)
+        a_partial = a_float.copy()
+        
+        # Sort by variance (diagonal of covariance)
+        variances = np.diag(Q_a)
+        sorted_indices = np.argsort(variances)
+        
+        # Try to fix ambiguities starting from most precise
+        for idx in sorted_indices:
+            if variances[idx] > 0.5:  # Too uncertain
+                continue
+            
+            # Try fixing this ambiguity
+            a_test = a_float.copy()
+            a_test[idx] = np.round(a_float[idx])
+            
+            # Simple validation
+            if np.abs(a_float[idx] - a_test[idx]) < 0.25:  # Close to integer
+                fixed_mask[idx] = True
+                a_partial[idx] = a_test[idx]
+        
+        return fixed_mask, a_partial

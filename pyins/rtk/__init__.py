@@ -14,7 +14,7 @@
 
 """RTK processing module for pyins"""
 
-from .ambiguity_resolution import AmbiguityResolver
+from .ambiguity_resolution import RTKAmbiguityManager
 from .cycle_slip import CycleSlipDetector
 from .dd_least_squares import DDLeastSquares, interpolate_epoch, interpolate_observations
 from .double_difference import DoubleDifferenceProcessor, SingleDifferenceProcessor
@@ -26,7 +26,7 @@ __all__ = [
     'DDLeastSquares',
     'interpolate_epoch',
     'interpolate_observations',
-    'AmbiguityResolver',
+    'RTKAmbiguityManager',
     'CycleSlipDetector',
     'RTKProcessor'
 ]
