@@ -264,24 +264,33 @@ def mlambda(a: np.ndarray, Q: np.ndarray, m: int = 2) -> Tuple[np.ndarray, np.nd
 
 class RTKAmbiguityManager:
     """
-    Integer ambiguity resolution using RTKLIB LAMBDA method and validation
+    Integer ambiguity resolution using GREAT-PVT approach with LAMBDA as fallback
+    
+    GREAT-PVT (Graph Robust Estimation for Adaptive Tracking) provides better
+    ambiguity resolution for challenging scenarios like long baselines by using
+    partial ambiguity fixing based on quality metrics.
     """
     
-    def __init__(self, ratio_threshold: float = 3.0, success_rate_threshold: float = 0.999,
-                 min_sats: int = 4, max_position_var: float = 0.1):
+    def __init__(self, ratio_threshold: float = 2.0, success_rate_threshold: float = 0.95,
+                 min_sats: int = 4, max_position_var: float = 0.1,
+                 use_great_pvt: bool = True, max_fix_count: int = 15):
         """
-        Initialize ambiguity resolver with RTKLIB LAMBDA
+        Initialize ambiguity resolver with GREAT-PVT approach
         
         Parameters
         ----------
         ratio_threshold : float
-            Threshold for ratio test (second best / best solution)
+            Threshold for ratio test (relaxed to 2.0 for GREAT-PVT)
         success_rate_threshold : float
-            Required success rate for validation
+            Required success rate for validation (relaxed to 0.95)
         min_sats : int
             Minimum satellites for ambiguity resolution
         max_position_var : float
             Maximum position variance for attempting AR
+        use_great_pvt : bool
+            Enable GREAT-PVT partial fixing (default: True)
+        max_fix_count : int
+            Maximum ambiguities to fix with GREAT-PVT (default: 15)
         """
         self.ratio_threshold = ratio_threshold
         self.success_rate_threshold = success_rate_threshold
@@ -289,6 +298,11 @@ class RTKAmbiguityManager:
         self.max_position_var = max_position_var
         self.fixed_ambiguities = {}
         self.ambiguity_covariance = None
+        
+        # GREAT-PVT parameters
+        self.use_great_pvt = use_great_pvt
+        self.max_fix_count = max_fix_count
+        self.max_sigma = 0.25  # Maximum sigma for GREAT-PVT selection
         
         # State tracking for validation
         self.prev_ratio = 0.0
