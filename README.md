@@ -12,7 +12,7 @@ PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, 
 - **Ephemeris handling**: Satellite selection and position computation with time-safe ephemeris
 - **SP3 Precise Ephemeris**: Support for IGS and MGEX precise orbit products with 40-80x accuracy improvement
 - **Time management**: Unified TimeCore system for all GNSS time systems with automatic conversions
-- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA method)
+- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA, MLAMBDA, and other methods)
 
 ### Sensor Fusion & IMU
 - **IMU mechanization**: Preintegration and bias estimation
@@ -202,6 +202,39 @@ graph.add_factor(doppler_factor)
 result = graph.optimize()
 ```
 
+## Ambiguity Resolution Methods
+
+PyINS supports multiple integer ambiguity resolution methods for RTK processing:
+
+### LAMBDA Method
+```python
+from pyins.rtk.ambiguity_resolution import AmbiguityResolver
+
+resolver = AmbiguityResolver(method='lambda')
+fixed_ambiguities, ratio = resolver.resolve_ambiguities(
+    float_ambiguities=N_float,
+    covariance=Q_N,
+    ratio_threshold=3.0
+)
+```
+
+### MLAMBDA Method (Modified LAMBDA)
+```python
+resolver = AmbiguityResolver(method='mlambda')
+fixed_ambiguities, ratio = resolver.resolve_ambiguities(
+    float_ambiguities=N_float,
+    covariance=Q_N,
+    search_space=2  # Search n-best candidates
+)
+```
+
+### Other Methods
+- **Rounding**: Simple integer rounding
+- **Bootstrapping**: Sequential conditional rounding
+- **ILS (Integer Least Squares)**: Optimal search
+- **PAR (Partial Ambiguity Resolution)**: Fix subset of ambiguities
+- **GREAT-PVT**: Fast partial resolution for real-time applications
+
 ## Module Structure
 
 ```
@@ -220,6 +253,7 @@ pyins/
 ├── rtk/            # RTK processing
 │   ├── double_difference.py
 │   ├── ambiguity_resolution.py
+│   ├── mlambda.py
 │   └── cycle_slip.py
 ├── fusion/         # Sensor fusion
 │   ├── ekf.py
@@ -340,6 +374,9 @@ RTK double difference processing with per-system reference satellites.
 
 #### RobotLeverArm
 Flexible lever arm management for multi-sensor robots.
+
+#### AmbiguityResolver
+Integer ambiguity resolution with multiple methods (LAMBDA, MLAMBDA, ILS, etc.)
 
 ## Contributing
 
