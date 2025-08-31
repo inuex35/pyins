@@ -38,6 +38,20 @@ import logging
 
 
 def main():
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='PyINS RTK Double Difference Example')
+    parser.add_argument('--data-dir', type=str, default=None,
+                        help='Directory containing observation and navigation files')
+    parser.add_argument('--rover-obs', type=str, default='rover.obs',
+                        help='Rover observation file name')
+    parser.add_argument('--base-obs', type=str, default='base.obs',
+                        help='Base observation file name')
+    parser.add_argument('--nav-file', type=str, default='navigation.nav',
+                        help='Navigation file name')
+    args = parser.parse_args()
+    
     print("PyINS RTK Double Difference Example")
     print("="*60)
     
@@ -46,10 +60,18 @@ def main():
                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     
-    # File paths - update these to your RINEX files
-    rover_obs_file = 'path/to/rover.obs'
-    base_obs_file = 'path/to/base.obs'
-    nav_file = 'path/to/navigation.nav'
+    # File paths
+    if args.data_dir:
+        from pathlib import Path
+        data_dir = Path(args.data_dir)
+        rover_obs_file = str(data_dir / args.rover_obs)
+        base_obs_file = str(data_dir / args.base_obs)
+        nav_file = str(data_dir / args.nav_file)
+    else:
+        # Default paths for demonstration
+        rover_obs_file = 'path/to/rover.obs'
+        base_obs_file = 'path/to/base.obs'
+        nav_file = 'path/to/navigation.nav'
     
     # For demonstration, we'll show the expected file format
     print("\nExpected RINEX file structure:")

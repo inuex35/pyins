@@ -348,19 +348,34 @@ def main():
     """
     import matplotlib.pyplot as plt
     from pathlib import Path
+    import argparse
     
-    # File paths - adjust to your RINEX files
-    rover_obs_file = "path/to/rover.obs"
-    base_obs_file = "path/to/base.obs"
-    nav_file = "path/to/navigation.nav"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='RTK with GREAT-PVT Ambiguity Resolution')
+    parser.add_argument('--data-dir', type=str, default=None,
+                        help='Directory containing observation and navigation files')
+    parser.add_argument('--rover-obs', type=str, default='rover.obs',
+                        help='Rover observation file name')
+    parser.add_argument('--base-obs', type=str, default='base.obs',
+                        help='Base observation file name')
+    parser.add_argument('--nav-file', type=str, default='rover.nav',
+                        help='Navigation file name')
+    args = parser.parse_args()
     
-    # For demonstration with sample data
-    sample_dir = Path(__file__).parent.parent / "data" / "sample"
-    if not Path(rover_obs_file).exists():
-        logger.info("Using sample data for demonstration")
-        rover_obs_file = sample_dir / "rover.obs"
-        base_obs_file = sample_dir / "base.obs"
-        nav_file = sample_dir / "rover.nav"
+    # Set data directory
+    if args.data_dir:
+        data_dir = Path(args.data_dir)
+    else:
+        # Default to sample data directory
+        data_dir = Path(__file__).parent.parent / "data" / "sample"
+        if not data_dir.exists():
+            logger.error("No data directory specified. Use --data-dir option.")
+            return
+    
+    # File paths
+    rover_obs_file = data_dir / args.rover_obs
+    base_obs_file = data_dir / args.base_obs
+    nav_file = data_dir / args.nav_file
     
     if not all(Path(f).exists() for f in [rover_obs_file, base_obs_file, nav_file]):
         logger.error("RINEX files not found. Please provide valid file paths.")

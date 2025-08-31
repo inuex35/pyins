@@ -163,16 +163,23 @@ def run_multi_gnss_spp(obs_file: str, nav_file: str,
 
 def main():
     """Example usage with sample data"""
-    import sys
+    import argparse
+    from pathlib import Path
 
-    # Default files (modify these paths for your data)
-    obs_file = "data/sample.obs"
-    nav_file = "data/sample.nav"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Multi-GNSS SPP Processing')
+    parser.add_argument('--data-dir', type=str, default='data',
+                        help='Directory containing observation and navigation files')
+    parser.add_argument('--obs-file', type=str, default='sample.obs',
+                        help='Observation file name')
+    parser.add_argument('--nav-file', type=str, default='sample.nav',
+                        help='Navigation file name')
+    args = parser.parse_args()
 
-    # Check command line arguments
-    if len(sys.argv) > 2:
-        obs_file = sys.argv[1]
-        nav_file = sys.argv[2]
+    # Set file paths
+    data_dir = Path(args.data_dir)
+    obs_file = str(data_dir / args.obs_file)
+    nav_file = str(data_dir / args.nav_file)
 
     # Run SPP
     # You can provide an initial position guess for faster convergence

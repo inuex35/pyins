@@ -378,12 +378,25 @@ class DDProcessor:
 
 def main():
     """Main function demonstrating DD processing"""
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Double Difference (DD) Processing')
+    parser.add_argument('--data-dir', type=str, default='../../okujo_test',
+                        help='Directory containing observation and navigation files')
+    parser.add_argument('--rover-obs', type=str, default='main.obs',
+                        help='Rover observation file name')
+    parser.add_argument('--base-obs', type=str, default='base.obs',
+                        help='Base observation file name')
+    parser.add_argument('--nav-file', type=str, default='rover.nav',
+                        help='Navigation file name')
+    args = parser.parse_args()
     
     # Configure data paths
-    data_dir = Path("../../okujo_test")  # Adjust path as needed
-    rover_obs_file = data_dir / "main.obs"
-    base_obs_file = data_dir / "base.obs"
-    nav_file = data_dir / "rover.nav"
+    data_dir = Path(args.data_dir)
+    rover_obs_file = data_dir / args.rover_obs
+    base_obs_file = data_dir / args.base_obs
+    nav_file = data_dir / args.nav_file
     
     # Check files exist
     for file_path in [rover_obs_file, base_obs_file, nav_file]:
