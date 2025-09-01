@@ -38,14 +38,106 @@ from ..core.time_conversions import (
 
 logger = logging.getLogger(__name__)
 
+# RTKLIB-compatible signal code mapping
+# Maps RINEX 3 observation codes to frequency indices with priorities
+SIGNAL_PRIORITY_MAP = {
+    'G': {  # GPS
+        0: [  # L1 band (1575.42 MHz)
+            'C1C', 'C1S', 'C1L', 'C1X', 'C1P', 'C1W', 'C1Y', 'C1M', 'C1N', 'P1'
+        ],
+        1: [  # L2 band (1227.60 MHz)
+            'C2W', 'C2L', 'C2S', 'C2X', 'C2C', 'C2P', 'C2Y', 'C2M', 'C2N', 'C2D', 'P2'
+        ],
+        2: [  # L5 band (1176.45 MHz)
+            'C5Q', 'C5I', 'C5X'
+        ]
+    },
+    'E': {  # Galileo
+        0: [  # E1 band (1575.42 MHz)
+            'C1C', 'C1A', 'C1B', 'C1X', 'C1Z'
+        ],
+        1: [  # E5b band (1207.14 MHz)
+            'C7Q', 'C7I', 'C7X'
+        ],
+        2: [  # E5a band (1176.45 MHz)
+            'C5Q', 'C5I', 'C5X'
+        ],
+        3: [  # E5 wideband (1191.795 MHz)
+            'C8Q', 'C8I', 'C8X'
+        ],
+        4: [  # E6 band (1278.75 MHz)
+            'C6A', 'C6B', 'C6C', 'C6X', 'C6Z'
+        ]
+    },
+    'C': {  # BeiDou
+        0: [  # B1 band
+            'C2I', 'C1I', 'C1Q', 'C1D', 'C1P', 'C1X', 'C1S', 'C1L'
+        ],
+        1: [  # B2I/B2b band
+            'C7I', 'C7Q', 'C7X', 'C7D', 'C7P', 'C7Z'
+        ],
+        2: [  # B2a band (1176.45 MHz)
+            'C5D', 'C5P', 'C5X'
+        ],
+        3: [  # B3 band (1268.52 MHz)
+            'C6I', 'C6Q', 'C6A', 'C6X', 'C6D', 'C6P'
+        ],
+        4: [  # B2ab band
+            'C8D', 'C8P', 'C8X'
+        ]
+    },
+    'R': {  # GLONASS
+        0: [  # G1 band (1602 + k*0.5625 MHz)
+            'C1C', 'C1P', 'C4A', 'C4B', 'C4X', 'P1'
+        ],
+        1: [  # G2 band (1246 + k*0.4375 MHz)
+            'C2C', 'C2P', 'P2'
+        ],
+        2: [  # G3 band
+            'C3I', 'C3Q', 'C3X'
+        ]
+    },
+    'J': {  # QZSS
+        0: [  # L1 band (1575.42 MHz)
+            'C1C', 'C1S', 'C1L', 'C1X', 'C1E', 'C1Z'
+        ],
+        1: [  # L2 band (1227.60 MHz)
+            'C2S', 'C2L', 'C2X'
+        ],
+        2: [  # L5 band (1176.45 MHz)
+            'C5Q', 'C5I', 'C5X', 'C5D', 'C5P', 'C5Z'
+        ],
+        3: [  # L6 band (1278.75 MHz)
+            'C6S', 'C6L', 'C6X', 'C6E', 'C6Z'
+        ]
+    },
+    'I': {  # IRNSS/NavIC
+        0: [  # L5 band (1176.45 MHz)
+            'C5A', 'C5B', 'C5C', 'C5X'
+        ],
+        1: [  # S band (2492.028 MHz)
+            'C9A', 'C9B', 'C9C', 'C9X'
+        ]
+    },
+    'S': {  # SBAS
+        0: [  # L1 band
+            'C1C'
+        ],
+        2: [  # L5 band
+            'C5I', 'C5Q', 'C5X'
+        ]
+    }
+}
+
 
 class RinexObsReader:
-    """RINEX observation file reader using gnsspy"""
+    """RINEX observation file reader using gnsspy with RTKLIB signal code support"""
 
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, max_frequencies: int = 5):
         self.filename = filename
         self.header = {}
         self.observations = []
+        self.max_frequencies = max_frequencies  # Support up to 5 frequencies
 
     def read(self) -> list[dict]:
         """Read RINEX observation file"""
@@ -132,36 +224,80 @@ class RinexObsReader:
                         system=0,  # Will be set by __post_init__
                     )
 
-                    # Get pseudorange
-                    # For BeiDou, prefer B1I (C2I) over B1C
-                    if sys_char == 'C':  # BeiDou
-                        if 'C2I' in sat_data and not pd.isna(sat_data['C2I']):
-                            obs.P[0] = float(sat_data['C2I'])
-                        elif 'C1I' in sat_data and not pd.isna(sat_data['C1I']):
-                            obs.P[0] = float(sat_data['C1I'])
-                    else:  # GPS, GLONASS, Galileo, QZSS
-                        if 'C1C' in sat_data and not pd.isna(sat_data['C1C']):
-                            obs.P[0] = float(sat_data['C1C'])
-                        elif 'C1X' in sat_data and not pd.isna(sat_data['C1X']):  # Galileo E1 BC
-                            obs.P[0] = float(sat_data['C1X'])
-                        elif 'C1' in sat_data and not pd.isna(sat_data['C1']):
-                            obs.P[0] = float(sat_data['C1'])
-                        elif 'P1' in sat_data and not pd.isna(sat_data['P1']):
-                            obs.P[0] = float(sat_data['P1'])
+                    # Process each frequency using priority-based signal selection
+                    for freq_idx in range(min(self.max_frequencies, len(obs.P))):
+                        # Get priority list for this system and frequency
+                        if sys_char in SIGNAL_PRIORITY_MAP and freq_idx in SIGNAL_PRIORITY_MAP[sys_char]:
+                            signal_list = SIGNAL_PRIORITY_MAP[sys_char][freq_idx]
+                            
+                            # Try each signal in priority order for pseudorange
+                            for signal_code in signal_list:
+                                if signal_code in sat_data and not pd.isna(sat_data[signal_code]):
+                                    obs.P[freq_idx] = float(sat_data[signal_code])
+                                    break
+                            
+                            # Try corresponding carrier phase (replace C with L, P with L)
+                            for signal_code in signal_list:
+                                phase_code = signal_code.replace('C', 'L').replace('P', 'L')
+                                if phase_code in sat_data and not pd.isna(sat_data[phase_code]):
+                                    obs.L[freq_idx] = float(sat_data[phase_code])
+                                    break
+                            
+                            # Try corresponding Doppler (replace C with D, P with D)
+                            for signal_code in signal_list:
+                                doppler_code = signal_code.replace('C', 'D').replace('P', 'D')
+                                if doppler_code in sat_data and not pd.isna(sat_data[doppler_code]):
+                                    obs.D[freq_idx] = float(sat_data[doppler_code])
+                                    break
+                            
+                            # Try corresponding SNR (replace C with S, P with S)
+                            for signal_code in signal_list:
+                                snr_code = signal_code.replace('C', 'S').replace('P', 'S')
+                                if snr_code in sat_data and not pd.isna(sat_data[snr_code]):
+                                    obs.SNR[freq_idx] = float(sat_data[snr_code])
+                                    break
 
-                    # Get carrier phase
-                    if sys_char == 'C':  # BeiDou
-                        if 'L2I' in sat_data and not pd.isna(sat_data['L2I']):
-                            obs.L[0] = float(sat_data['L2I'])
-                        elif 'L1I' in sat_data and not pd.isna(sat_data['L1I']):
-                            obs.L[0] = float(sat_data['L1I'])
-                    else:
-                        if 'L1C' in sat_data and not pd.isna(sat_data['L1C']):
-                            obs.L[0] = float(sat_data['L1C'])
-                        elif 'L1X' in sat_data and not pd.isna(sat_data['L1X']):  # Galileo E1 BC
-                            obs.L[0] = float(sat_data['L1X'])
-                        elif 'L1' in sat_data and not pd.isna(sat_data['L1']):
-                            obs.L[0] = float(sat_data['L1'])
+                    # All signal processing is now handled by the priority-based system above
+                    # The code below (lines 263-464) contains legacy hardcoded signal handling
+                    # that can be safely removed as it's redundant with the priority-based system
+                    
+                    """
+                    # Get L2 carrier phase (frequency index 1)
+                    if sys_char == 'G':  # GPS
+                        if 'L2W' in sat_data and not pd.isna(sat_data['L2W']):
+                            obs.L[1] = float(sat_data['L2W'])
+                        elif 'L2X' in sat_data and not pd.isna(sat_data['L2X']):
+                            obs.L[1] = float(sat_data['L2X'])
+                        elif 'L2L' in sat_data and not pd.isna(sat_data['L2L']):
+                            obs.L[1] = float(sat_data['L2L'])
+                        elif 'L2C' in sat_data and not pd.isna(sat_data['L2C']):
+                            obs.L[1] = float(sat_data['L2C'])
+                        elif 'L2S' in sat_data and not pd.isna(sat_data['L2S']):
+                            obs.L[1] = float(sat_data['L2S'])
+                        elif 'L2' in sat_data and not pd.isna(sat_data['L2']):
+                            obs.L[1] = float(sat_data['L2'])
+                    elif sys_char == 'R':  # GLONASS
+                        if 'L2C' in sat_data and not pd.isna(sat_data['L2C']):
+                            obs.L[1] = float(sat_data['L2C'])
+                        elif 'L2P' in sat_data and not pd.isna(sat_data['L2P']):
+                            obs.L[1] = float(sat_data['L2P'])
+                    elif sys_char == 'E':  # Galileo E5b
+                        if 'L7Q' in sat_data and not pd.isna(sat_data['L7Q']):
+                            obs.L[1] = float(sat_data['L7Q'])
+                        elif 'L7X' in sat_data and not pd.isna(sat_data['L7X']):
+                            obs.L[1] = float(sat_data['L7X'])
+                        elif 'L7I' in sat_data and not pd.isna(sat_data['L7I']):
+                            obs.L[1] = float(sat_data['L7I'])
+                    elif sys_char == 'C':  # BeiDou B2I
+                        if 'L7I' in sat_data and not pd.isna(sat_data['L7I']):
+                            obs.L[1] = float(sat_data['L7I'])
+                        elif 'L7D' in sat_data and not pd.isna(sat_data['L7D']):
+                            obs.L[1] = float(sat_data['L7D'])
+                    elif sys_char == 'J':  # QZSS
+                        if 'L2L' in sat_data and not pd.isna(sat_data['L2L']):
+                            obs.L[1] = float(sat_data['L2L'])
+                        elif 'L2X' in sat_data and not pd.isna(sat_data['L2X']):
+                            obs.L[1] = float(sat_data['L2X'])
 
                     # Get Doppler
                     if sys_char == 'C':  # BeiDou
@@ -272,7 +408,65 @@ class RinexObsReader:
                     elif 'S7X' in sat_data and not pd.isna(sat_data['S7X']):
                         obs.SNR[1] = float(sat_data['S7X'])
 
+                    # Get L5/E5a/B2a observations (frequency index 2)
+                    if sys_char == 'G':  # GPS L5
+                        if 'C5Q' in sat_data and not pd.isna(sat_data['C5Q']):
+                            obs.P[2] = float(sat_data['C5Q'])
+                        elif 'C5X' in sat_data and not pd.isna(sat_data['C5X']):
+                            obs.P[2] = float(sat_data['C5X'])
+                        elif 'C5I' in sat_data and not pd.isna(sat_data['C5I']):
+                            obs.P[2] = float(sat_data['C5I'])
+                        
+                        if 'L5Q' in sat_data and not pd.isna(sat_data['L5Q']):
+                            obs.L[2] = float(sat_data['L5Q'])
+                        elif 'L5X' in sat_data and not pd.isna(sat_data['L5X']):
+                            obs.L[2] = float(sat_data['L5X'])
+                        elif 'L5I' in sat_data and not pd.isna(sat_data['L5I']):
+                            obs.L[2] = float(sat_data['L5I'])
+                            
+                    elif sys_char == 'E':  # Galileo E5a
+                        if 'C5Q' in sat_data and not pd.isna(sat_data['C5Q']):
+                            obs.P[2] = float(sat_data['C5Q'])
+                        elif 'C5X' in sat_data and not pd.isna(sat_data['C5X']):
+                            obs.P[2] = float(sat_data['C5X'])
+                        elif 'C5I' in sat_data and not pd.isna(sat_data['C5I']):
+                            obs.P[2] = float(sat_data['C5I'])
+                        
+                        if 'L5Q' in sat_data and not pd.isna(sat_data['L5Q']):
+                            obs.L[2] = float(sat_data['L5Q'])
+                        elif 'L5X' in sat_data and not pd.isna(sat_data['L5X']):
+                            obs.L[2] = float(sat_data['L5X'])
+                        elif 'L5I' in sat_data and not pd.isna(sat_data['L5I']):
+                            obs.L[2] = float(sat_data['L5I'])
+                            
+                    elif sys_char == 'C':  # BeiDou B2a
+                        if 'C5P' in sat_data and not pd.isna(sat_data['C5P']):
+                            obs.P[2] = float(sat_data['C5P'])
+                        elif 'C5D' in sat_data and not pd.isna(sat_data['C5D']):
+                            obs.P[2] = float(sat_data['C5D'])
+                        elif 'C5X' in sat_data and not pd.isna(sat_data['C5X']):
+                            obs.P[2] = float(sat_data['C5X'])
+                        
+                        if 'L5P' in sat_data and not pd.isna(sat_data['L5P']):
+                            obs.L[2] = float(sat_data['L5P'])
+                        elif 'L5D' in sat_data and not pd.isna(sat_data['L5D']):
+                            obs.L[2] = float(sat_data['L5D'])
+                        elif 'L5X' in sat_data and not pd.isna(sat_data['L5X']):
+                            obs.L[2] = float(sat_data['L5X'])
+                            
+                    elif sys_char == 'J':  # QZSS L5
+                        if 'C5Q' in sat_data and not pd.isna(sat_data['C5Q']):
+                            obs.P[2] = float(sat_data['C5Q'])
+                        elif 'C5X' in sat_data and not pd.isna(sat_data['C5X']):
+                            obs.P[2] = float(sat_data['C5X'])
+                        
+                        if 'L5Q' in sat_data and not pd.isna(sat_data['L5Q']):
+                            obs.L[2] = float(sat_data['L5Q'])
+                        elif 'L5X' in sat_data and not pd.isna(sat_data['L5X']):
+                            obs.L[2] = float(sat_data['L5X'])
+
                     # Check other bands if needed, e.g. L6/L8 for Galileo
+                    """
 
                     # Only add if we have valid data
                     if np.any(obs.P > 0) or np.any(obs.L > 0):
