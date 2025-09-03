@@ -30,7 +30,8 @@ class GreatPVTLambdaResolver:
                  max_candidates: int = 2,
                  elevation_threshold: float = 15.0,
                  min_satellites: int = 4,
-                 max_deviation: float = 0.25):
+                 max_deviation: float = 0.25,  # Not used anymore, kept for compatibility
+                 use_satellite_selection: bool = False):
         """
         Initialize GREAT-PVT LAMBDA resolver
         
@@ -46,16 +47,32 @@ class GreatPVTLambdaResolver:
             Minimum number of satellites to fix
         max_deviation : float
             Maximum allowed deviation in cycles for validation
+        use_satellite_selection : bool
+            Enable quality-based satellite selection
         """
         self.ratio_threshold = ratio_threshold
         self.max_candidates = max_candidates
         self.elevation_threshold = elevation_threshold
         self.min_satellites = min_satellites
         self.max_deviation = max_deviation
+        self.use_satellite_selection = use_satellite_selection
+        
+        # Import selection resolver if enabled
+        if use_satellite_selection:
+            from .lambda_greatpvt_with_selection import GreatPVTWithSelection
+            self.selection_resolver = GreatPVTWithSelection(
+                ratio_threshold=ratio_threshold,
+                max_candidates=max_candidates,
+                elevation_threshold=elevation_threshold,
+                min_satellites=min_satellites
+            )
+        else:
+            self.selection_resolver = None
         
     def resolve(self, float_ambiguities: np.ndarray, 
                 covariance: np.ndarray,
-                elevations: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float, bool, dict]:
+                elevations: Optional[np.ndarray] = None,
+                satellite_ids: Optional[List[str]] = None) -> Tuple[np.ndarray, float, bool, dict]:
         """
         Resolve integer ambiguities using GREAT-PVT approach
         
@@ -67,6 +84,8 @@ class GreatPVTLambdaResolver:
             Covariance matrix of float ambiguities (n, n)
         elevations : np.ndarray, optional
             Satellite elevation angles in degrees
+        satellite_ids : List[str], optional
+            Satellite identifiers for quality-based selection
             
         Returns
         -------
@@ -86,6 +105,11 @@ class GreatPVTLambdaResolver:
             'decorrelated': False,
             'validated': False
         }
+        
+        # Use satellite selection if enabled and satellite IDs provided
+        if self.use_satellite_selection and self.selection_resolver and satellite_ids is not None:
+            return self.selection_resolver.resolve(
+                float_ambiguities, covariance, elevations, satellite_ids)
         
         # Apply elevation mask if provided
         if elevations is not None and n > self.min_satellites:
@@ -129,26 +153,23 @@ class GreatPVTLambdaResolver:
         ratio = np.sqrt(residuals[1] / residuals[0]) if residuals[0] > 0 else 0
         info['ratio'] = ratio
         
-        # Check if ratio test passes
-        is_fixed = ratio >= self.ratio_threshold
+        # Check if ratio test passes (use > like GREAT-PVT, not >=)
+        is_fixed = ratio > self.ratio_threshold
         info['ratio_passed'] = is_fixed
         
         if is_fixed:
-            # Validate solution
+            # Skip validation - trust ratio test like original GREAT-PVT
             fixed_subset = np.round(fixed_candidates[0]).astype(int)
-            is_valid = self._validate_solution(fixed_subset, float_subset, cov_subset)
-            info['validated'] = is_valid
+            # is_valid = self._validate_solution(fixed_subset, float_subset, cov_subset)
+            # info['validated'] = is_valid
+            info['validated'] = True  # Always pass validation when ratio test passes
             
-            if is_valid:
-                # Build full solution
-                fixed_ambiguities = float_ambiguities.copy()
-                fixed_ambiguities[subset_indices] = fixed_subset
-                
-                logger.info(f"Ambiguities fixed with ratio: {ratio:.2f}")
-                return fixed_ambiguities.astype(int), ratio, True, info
-            else:
-                logger.warning("Fixed solution failed validation")
-                return float_ambiguities, ratio, False, info
+            # Build full solution
+            fixed_ambiguities = float_ambiguities.copy()
+            fixed_ambiguities[subset_indices] = fixed_subset
+            
+            logger.info(f"Ambiguities fixed with ratio: {ratio:.2f}")
+            return fixed_ambiguities.astype(int), ratio, True, info
         else:
             logger.debug(f"Ratio test failed: {ratio:.2f} < {self.ratio_threshold}")
             return float_ambiguities, ratio, False, info

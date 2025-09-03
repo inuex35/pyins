@@ -112,7 +112,7 @@ class PartialAmbiguityResolver:
                     best_score = score
                     
                     # Build full result
-                    fixed_full = float_amb.copy()
+                    fixed_full = np.array(float_amb, copy=True)  # Ensure writable copy
                     fixed_full[subset_indices] = fixed_subset
                     
                     float_indices = np.setdiff1d(np.arange(n), subset_indices)
@@ -188,17 +188,18 @@ class PartialAmbiguityResolver:
         n = Q.shape[0]
         Z = np.eye(n)
         L = np.eye(n)
-        D = np.diag(Q)
+        D = np.diag(Q).copy()  # Make writable copy
+        Q_work = Q.copy()  # Work on a copy
         
         # Basic Gram-Schmidt orthogonalization
         for i in range(1, n):
             for j in range(i):
                 if D[j] > 0:
-                    mu = Q[i, j] / D[j]
+                    mu = Q_work[i, j] / D[j]
                     L[i, j] = mu
                     for k in range(j + 1, i):
-                        Q[i, k] -= mu * Q[j, k]
-                    D[i] -= mu * Q[i, j]
+                        Q_work[i, k] -= mu * Q_work[j, k]
+                    D[i] -= mu * Q_work[i, j]
         
         return Z, L, D
     
