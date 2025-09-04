@@ -15,6 +15,7 @@ This module extends the basic GREAT-PVT with:
 import numpy as np
 from typing import Tuple, Optional, List, Dict
 import logging
+from ..utils.ambiguity import lambda_reduction, lambda_search
 
 logger = logging.getLogger(__name__)
 
@@ -28,16 +29,10 @@ class GreatPVTWithSelection:
     short-baseline scenarios.
     """
     
-    # Known good satellites (deviation < 0.1 cycles from zero-baseline analysis)
-    GOOD_SATELLITES = {
-        'C04', 'J07', 'C03', 'G14', 'C16', 'G13', 'G15',
-        'E12', 'C13', 'E19'
-    }
-    
-    # Known problematic satellites (deviation > 0.35 cycles)
-    BAD_SATELLITES = {
-        'G23', 'G21', 'C21', 'E27', 'C22', 'E29', 'E21', 'G22'
-    }
+    # Disabled hardcoded satellite lists - they are dataset-specific
+    # These were from kaiyodai zero-baseline analysis and don't apply to other datasets
+    GOOD_SATELLITES = set()  # Empty - rely on dynamic metrics
+    BAD_SATELLITES = set()   # Empty - rely on dynamic metrics
     
     # System-specific quality weights (based on zero-baseline analysis)
     SYSTEM_WEIGHTS = {
@@ -109,11 +104,12 @@ class GreatPVTWithSelection:
         n = len(satellite_ids)
         quality_scores = np.ones(n)
         
-        # Factor 1: Known good/bad satellites
+        # Factor 1: Known good/bad satellites (disabled for dataset-agnostic operation)
+        # Only apply if lists are not empty
         for i, sat_id in enumerate(satellite_ids):
-            if sat_id in self.GOOD_SATELLITES:
+            if self.GOOD_SATELLITES and sat_id in self.GOOD_SATELLITES:
                 quality_scores[i] *= 2.0  # Boost good satellites
-            elif sat_id in self.BAD_SATELLITES:
+            elif self.BAD_SATELLITES and sat_id in self.BAD_SATELLITES:
                 quality_scores[i] *= 0.3  # Penalize bad satellites
             
             # Factor 2: System quality
@@ -305,39 +301,59 @@ class GreatPVTWithSelection:
         except:
             return float_ambiguities, 0.0, False, info
         
-        # Integer rounding (simplified for demonstration)
-        # In practice, use full LAMBDA implementation
-        z_float = float_amb_subset
-        z_fixed = np.round(z_float).astype(int)
-        
-        # Compute ratio test
+        # Use proper LAMBDA search for integer ambiguities
         try:
-            # Inverse of covariance
-            Q_inv = np.linalg.inv(cov_subset)
+            # LAMBDA reduction
+            Z, L, D = lambda_reduction(cov_subset)
             
-            # Best integer solution residual
-            residual_best = z_float - z_fixed
-            score_best = residual_best.T @ Q_inv @ residual_best
+            # Transform float ambiguities
+            z_hat = Z.T @ float_amb_subset
             
-            # Second best (change the ambiguity with largest residual)
-            z_second = z_fixed.copy()
-            worst_idx = np.argmax(np.abs(residual_best))
-            if residual_best[worst_idx] > 0:
-                z_second[worst_idx] -= 1
+            # Integer search (get top 2 candidates for ratio test)
+            candidates, scores = lambda_search(z_hat, L, D, ncands=2)
+            
+            if len(candidates) >= 2:
+                # Transform back to original space
+                z_fixed = Z @ candidates[0]
+                z_fixed = np.round(z_fixed).astype(int)  # Ensure integers
+                
+                # Compute ratio
+                if scores[0] > 0:
+                    ratio = np.sqrt(scores[1] / scores[0])
+                else:
+                    ratio = float('inf')
+            elif len(candidates) == 1:
+                # Only one candidate found
+                z_fixed = Z @ candidates[0]
+                z_fixed = np.round(z_fixed).astype(int)
+                ratio = float('inf')  # No second candidate for ratio
             else:
-                z_second[worst_idx] += 1
-            
-            residual_second = z_float - z_second
-            score_second = residual_second.T @ Q_inv @ residual_second
-            
-            # Ratio test
-            if score_best > 0:
-                ratio = np.sqrt(score_second / score_best)
-            else:
-                ratio = float('inf')
+                # No candidates found, fall back to rounding
+                z_fixed = np.round(float_amb_subset).astype(int)
+                ratio = 0.0
+                
         except Exception as e:
-            logger.debug(f"Ratio computation failed: {e}")
-            ratio = 0.0
+            logger.debug(f"LAMBDA search failed: {e}, falling back to rounding")
+            # Fall back to simple rounding if LAMBDA fails
+            z_fixed = np.round(float_amb_subset).astype(int)
+            
+            try:
+                # Compute basic ratio test
+                Q_inv = np.linalg.inv(cov_subset)
+                residual = float_amb_subset - z_fixed
+                score_best = residual.T @ Q_inv @ residual
+                
+                # Simple second-best
+                z_second = z_fixed.copy()
+                worst_idx = np.argmax(np.abs(residual))
+                z_second[worst_idx] += 1 if residual[worst_idx] > 0 else -1
+                
+                residual_second = float_amb_subset - z_second
+                score_second = residual_second.T @ Q_inv @ residual_second
+                
+                ratio = np.sqrt(score_second / score_best) if score_best > 0 else 0.0
+            except:
+                ratio = 0.0
         
         # Accept if ratio exceeds threshold
         is_fixed = ratio >= self.ratio_threshold

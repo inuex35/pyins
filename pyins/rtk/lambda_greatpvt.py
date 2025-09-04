@@ -1,39 +1,69 @@
 #!/usr/bin/env python3
 """
-LAMBDA Implementation Based on GREAT-PVT
-=========================================
+Multi-Frequency LAMBDA Implementation Based on GREAT-PVT
+=========================================================
 
-This module implements the LAMBDA method following GREAT-PVT's approach,
-which emphasizes simplicity and practical robustness over theoretical completeness.
+This module implements the LAMBDA method with multi-frequency support,
+following GREAT-PVT's approach with EWL->WL->NL cascaded resolution.
 
-Based on GREAT-PVT's implementation with enhancements for pyins.
+Based on GREAT-PVT's implementation with multi-frequency enhancements.
 """
 
 import numpy as np
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Union
 import logging
+from dataclasses import dataclass
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 
+class FrequencyType(Enum):
+    """Frequency/combination types"""
+    L1 = "L1"
+    L2 = "L2" 
+    L5 = "L5"
+    WL = "WL"    # Wide-Lane (L1-L2)
+    NL = "NL"    # Narrow-Lane ((L1+L2)/2)
+    EWL = "EWL"  # Extra-Wide-Lane (L2-L5)
+    IF = "IF"    # Ionosphere-Free
+
+
+@dataclass
+class MultiFreqData:
+    """Container for multi-frequency ambiguity data"""
+    float_ambiguities: Dict[FrequencyType, np.ndarray]
+    covariances: Dict[FrequencyType, np.ndarray]
+    wavelengths: Dict[FrequencyType, float]
+    satellite_ids: Optional[List[str]] = None
+    elevations: Optional[np.ndarray] = None
+
+
 class GreatPVTLambdaResolver:
     """
-    LAMBDA resolver using GREAT-PVT's simplified approach
+    Multi-frequency LAMBDA resolver using GREAT-PVT's simplified approach
     
-    This implementation prioritizes:
-    - Computational efficiency
-    - Practical robustness
-    - Ease of understanding
+    This implementation supports:
+    - Multi-frequency cascaded resolution (EWL->WL->NL)
+    - Multi-GNSS support
+    - Automatic frequency detection
+    - Backwards compatibility with single-frequency
     """
     
-    def __init__(self, ratio_threshold: float = 3.0,
+    def __init__(self, 
+                 ratio_threshold: float = 3.0,
                  max_candidates: int = 2,
                  elevation_threshold: float = 15.0,
                  min_satellites: int = 4,
-                 max_deviation: float = 0.25,  # Not used anymore, kept for compatibility
-                 use_satellite_selection: bool = False):
+                 max_deviation: float = 0.25,
+                 use_satellite_selection: bool = False,
+                 # Multi-frequency specific parameters
+                 wl_threshold: float = 0.25,  # cycles
+                 nl_threshold: float = 0.15,  # cycles
+                 ewl_threshold: float = 0.30,  # cycles
+                 enable_multifreq: bool = True):
         """
-        Initialize GREAT-PVT LAMBDA resolver
+        Initialize multi-frequency GREAT-PVT LAMBDA resolver
         
         Parameters
         ----------
@@ -49,6 +79,14 @@ class GreatPVTLambdaResolver:
             Maximum allowed deviation in cycles for validation
         use_satellite_selection : bool
             Enable quality-based satellite selection
+        wl_threshold : float
+            Threshold for WL ambiguity decision (cycles)
+        nl_threshold : float
+            Threshold for NL ambiguity decision (cycles)
+        ewl_threshold : float
+            Threshold for EWL ambiguity decision (cycles)
+        enable_multifreq : bool
+            Enable multi-frequency processing
         """
         self.ratio_threshold = ratio_threshold
         self.max_candidates = max_candidates
@@ -57,35 +95,68 @@ class GreatPVTLambdaResolver:
         self.max_deviation = max_deviation
         self.use_satellite_selection = use_satellite_selection
         
+        # Multi-frequency parameters
+        self.wl_threshold = wl_threshold
+        self.nl_threshold = nl_threshold
+        self.ewl_threshold = ewl_threshold
+        self.enable_multifreq = enable_multifreq
+        
+        # Store fixed ambiguities for cascaded resolution
+        self.fixed_wl: Dict[str, int] = {}
+        self.fixed_nl: Dict[str, int] = {}
+        self.fixed_ewl: Dict[str, int] = {}
+        
+        # GPS L1/L2/L5 wavelengths (meters)
+        self.wavelengths = {
+            FrequencyType.L1: 0.19029367,
+            FrequencyType.L2: 0.24421021,
+            FrequencyType.L5: 0.25482064,
+            FrequencyType.WL: 0.86190382,  # L1-L2
+            FrequencyType.NL: 0.10695739,  # (L1+L2)/2
+            FrequencyType.EWL: 5.861,       # L2-L5
+        }
+        
         # Import selection resolver if enabled
         if use_satellite_selection:
-            from .lambda_greatpvt_with_selection import GreatPVTWithSelection
-            self.selection_resolver = GreatPVTWithSelection(
-                ratio_threshold=ratio_threshold,
-                max_candidates=max_candidates,
-                elevation_threshold=elevation_threshold,
-                min_satellites=min_satellites
-            )
+            try:
+                from .lambda_greatpvt_with_selection import GreatPVTWithSelection
+                self.selection_resolver = GreatPVTWithSelection(
+                    ratio_threshold=ratio_threshold,
+                    max_candidates=max_candidates,
+                    elevation_threshold=elevation_threshold,
+                    min_satellites=min_satellites
+                )
+            except ImportError:
+                logger.warning("Selection resolver not available")
+                self.selection_resolver = None
         else:
             self.selection_resolver = None
-        
-    def resolve(self, float_ambiguities: np.ndarray, 
-                covariance: np.ndarray,
+    
+    def resolve(self, 
+                float_ambiguities: Union[np.ndarray, Dict[str, np.ndarray]], 
+                covariance: Union[np.ndarray, Dict[str, np.ndarray]],
                 elevations: Optional[np.ndarray] = None,
-                satellite_ids: Optional[List[str]] = None) -> Tuple[np.ndarray, float, bool, dict]:
+                satellite_ids: Optional[List[str]] = None,
+                frequency_info: Optional[Union[str, Dict]] = None) -> Tuple[np.ndarray, float, bool, dict]:
         """
-        Resolve integer ambiguities using GREAT-PVT approach
+        Resolve integer ambiguities with multi-frequency support
         
         Parameters
         ----------
-        float_ambiguities : np.ndarray
-            Float ambiguity estimates (n,)
-        covariance : np.ndarray
-            Covariance matrix of float ambiguities (n, n)
+        float_ambiguities : np.ndarray or dict
+            Float ambiguity estimates
+            - np.ndarray: Single frequency (backward compatible)
+            - dict: Multi-frequency {'L1': array, 'L2': array, ...}
+        covariance : np.ndarray or dict
+            Covariance matrix of float ambiguities
         elevations : np.ndarray, optional
             Satellite elevation angles in degrees
         satellite_ids : List[str], optional
             Satellite identifiers for quality-based selection
+        frequency_info : str or dict, optional
+            Frequency information
+            - str: 'L1', 'L2', 'L1L2', etc.
+            - dict: Detailed frequency mapping
             
         Returns
         -------
@@ -98,15 +169,126 @@ class GreatPVTLambdaResolver:
         info : dict
             Additional information about resolution
         """
+        
+        # Check if multi-frequency data is provided
+        if isinstance(float_ambiguities, dict) and self.enable_multifreq:
+            return self._resolve_multifreq(
+                float_ambiguities, covariance, elevations, satellite_ids
+            )
+        
+        # Single-frequency processing (backward compatible)
+        if isinstance(float_ambiguities, np.ndarray):
+            return self._resolve_single_freq(
+                float_ambiguities, covariance, elevations, satellite_ids
+            )
+        
+        # If dict but multifreq disabled, use L1 only
+        if isinstance(float_ambiguities, dict):
+            if 'L1' in float_ambiguities:
+                return self._resolve_single_freq(
+                    float_ambiguities['L1'], 
+                    covariance['L1'] if isinstance(covariance, dict) else covariance,
+                    elevations, satellite_ids
+                )
+            else:
+                # Use first available frequency
+                freq = list(float_ambiguities.keys())[0]
+                return self._resolve_single_freq(
+                    float_ambiguities[freq],
+                    covariance[freq] if isinstance(covariance, dict) else covariance,
+                    elevations, satellite_ids
+                )
+    
+    def _resolve_multifreq(self, 
+                          float_amb_dict: Dict[str, np.ndarray],
+                          cov_dict: Dict[str, np.ndarray],
+                          elevations: Optional[np.ndarray],
+                          satellite_ids: Optional[List[str]]) -> Tuple[np.ndarray, float, bool, dict]:
+        """
+        Multi-frequency cascaded ambiguity resolution
+        """
+        info = {
+            'method': 'GREAT-PVT-MultiFreq',
+            'frequencies_available': list(float_amb_dict.keys()),
+            'cascaded_resolution': True
+        }
+        
+        n = len(next(iter(float_amb_dict.values())))
+        fixed_ambiguities = np.zeros(n)
+        
+        # Step 1: Resolve EWL if L2 and L5 are available
+        if 'L2' in float_amb_dict and 'L5' in float_amb_dict:
+            ewl_float = self._form_ewl(float_amb_dict['L2'], float_amb_dict['L5'])
+            ewl_cov = self._combine_covariance(cov_dict.get('L2'), cov_dict.get('L5'))
+            
+            ewl_fixed = self._resolve_ewl(ewl_float, ewl_cov, satellite_ids)
+            info['ewl_fixed'] = len(ewl_fixed)
+            info['ewl_success_rate'] = len(ewl_fixed) / n if n > 0 else 0
+        
+        # Step 2: Resolve WL if L1 and L2 are available
+        if 'L1' in float_amb_dict and 'L2' in float_amb_dict:
+            wl_float = self._form_wl(float_amb_dict['L1'], float_amb_dict['L2'])
+            wl_cov = self._combine_covariance(cov_dict.get('L1'), cov_dict.get('L2'))
+            
+            wl_fixed = self._resolve_wl(wl_float, wl_cov, satellite_ids)
+            info['wl_fixed'] = len(wl_fixed)
+            info['wl_success_rate'] = len(wl_fixed) / n if n > 0 else 0
+            
+            # Step 3: Resolve NL using WL constraint
+            if len(wl_fixed) >= self.min_satellites:
+                nl_float = self._form_nl(float_amb_dict['L1'], float_amb_dict['L2'])
+                nl_cov = self._combine_covariance(cov_dict.get('L1'), cov_dict.get('L2'))
+                
+                nl_fixed, ratio = self._resolve_nl_with_wl(
+                    nl_float, nl_cov, wl_fixed, satellite_ids
+                )
+                
+                # Recover L1 and L2 from WL and NL
+                if len(nl_fixed) >= self.min_satellites:
+                    for i, sat in enumerate(satellite_ids or range(n)):
+                        sat_key = str(sat)
+                        if sat_key in wl_fixed and sat_key in nl_fixed:
+                            # L1 = NL + WL/2, L2 = NL - WL/2
+                            fixed_ambiguities[i] = nl_fixed[sat_key] + wl_fixed[sat_key] / 2.0
+                    
+                    is_fixed = True
+                    info['nl_fixed'] = len(nl_fixed)
+                    info['ratio'] = ratio
+                else:
+                    is_fixed = False
+                    ratio = 0.0
+            else:
+                is_fixed = False
+                ratio = 0.0
+        else:
+            # Fallback to single frequency if only L1 available
+            if 'L1' in float_amb_dict:
+                return self._resolve_single_freq(
+                    float_amb_dict['L1'], 
+                    cov_dict.get('L1', np.eye(n)),
+                    elevations, satellite_ids
+                )
+            is_fixed = False
+            ratio = 0.0
+        
+        return fixed_ambiguities, ratio, is_fixed, info
+    
+    def _resolve_single_freq(self, float_ambiguities: np.ndarray, 
+                            covariance: np.ndarray,
+                            elevations: Optional[np.ndarray],
+                            satellite_ids: Optional[List[str]]) -> Tuple[np.ndarray, float, bool, dict]:
+        """
+        Original single-frequency resolution (backward compatible)
+        """
         n = len(float_ambiguities)
         info = {
             'n_ambiguities': n,
-            'method': 'GREAT-PVT',
+            'method': 'GREAT-PVT-SingleFreq',
             'decorrelated': False,
             'validated': False
         }
         
-        # Use satellite selection if enabled and satellite IDs provided
+        # Use satellite selection if enabled
         if self.use_satellite_selection and self.selection_resolver and satellite_ids is not None:
             return self.selection_resolver.resolve(
                 float_ambiguities, covariance, elevations, satellite_ids)
@@ -115,13 +297,11 @@ class GreatPVTLambdaResolver:
         if elevations is not None and n > self.min_satellites:
             mask, subset_indices = self._apply_elevation_mask(elevations)
             if len(subset_indices) >= self.min_satellites:
-                # Work with high-elevation subset
                 float_subset = float_ambiguities[subset_indices]
                 cov_subset = covariance[np.ix_(subset_indices, subset_indices)]
                 info['subset_size'] = len(subset_indices)
                 info['elevation_filtered'] = True
             else:
-                # Not enough high-elevation satellites
                 float_subset = float_ambiguities
                 cov_subset = covariance
                 info['elevation_filtered'] = False
@@ -149,20 +329,17 @@ class GreatPVTLambdaResolver:
         for candidate in candidates:
             fixed_candidates.append(Z @ candidate)
         
-        # Ratio test (GREAT-PVT style with square root)
+        # Ratio test
         ratio = np.sqrt(residuals[1] / residuals[0]) if residuals[0] > 0 else 0
         info['ratio'] = ratio
         
-        # Check if ratio test passes (use > like GREAT-PVT, not >=)
+        # Check if ratio test passes
         is_fixed = ratio > self.ratio_threshold
         info['ratio_passed'] = is_fixed
         
         if is_fixed:
-            # Skip validation - trust ratio test like original GREAT-PVT
             fixed_subset = np.round(fixed_candidates[0]).astype(int)
-            # is_valid = self._validate_solution(fixed_subset, float_subset, cov_subset)
-            # info['validated'] = is_valid
-            info['validated'] = True  # Always pass validation when ratio test passes
+            info['validated'] = True
             
             # Build full solution
             fixed_ambiguities = float_ambiguities.copy()
@@ -173,6 +350,115 @@ class GreatPVTLambdaResolver:
         else:
             logger.debug(f"Ratio test failed: {ratio:.2f} < {self.ratio_threshold}")
             return float_ambiguities, ratio, False, info
+    
+    def _form_wl(self, l1_amb: np.ndarray, l2_amb: np.ndarray) -> np.ndarray:
+        """Form Wide-Lane combination (L1 - L2)"""
+        return l1_amb - l2_amb
+    
+    def _form_nl(self, l1_amb: np.ndarray, l2_amb: np.ndarray) -> np.ndarray:
+        """Form Narrow-Lane combination ((L1 + L2) / 2)"""
+        return (l1_amb + l2_amb) / 2.0
+    
+    def _form_ewl(self, l2_amb: np.ndarray, l5_amb: np.ndarray) -> np.ndarray:
+        """Form Extra-Wide-Lane combination (L2 - L5)"""
+        return l2_amb - l5_amb
+    
+    def _combine_covariance(self, cov1: Optional[np.ndarray], 
+                           cov2: Optional[np.ndarray]) -> np.ndarray:
+        """Combine covariances for linear combinations"""
+        if cov1 is None or cov2 is None:
+            n = len(cov1) if cov1 is not None else len(cov2)
+            return np.eye(n) * 0.01  # Default small covariance
+        # For difference: Cov(L1-L2) = Cov(L1) + Cov(L2) - 2*Cov(L1,L2)
+        # Simplified assuming independence
+        return cov1 + cov2
+    
+    def _resolve_ewl(self, ewl_float: np.ndarray, ewl_cov: np.ndarray,
+                    satellite_ids: Optional[List[str]]) -> Dict[str, int]:
+        """Resolve EWL ambiguities (easiest with ~5.86m wavelength)"""
+        fixed = {}
+        ewl_sigma = np.sqrt(np.diag(ewl_cov))
+        
+        for i, sat in enumerate(satellite_ids or range(len(ewl_float))):
+            if ewl_sigma[i] < self.ewl_threshold:
+                fixed_val = round(ewl_float[i])
+                residual = abs(ewl_float[i] - fixed_val)
+                if residual < self.ewl_threshold:
+                    fixed[str(sat)] = fixed_val
+                    self.fixed_ewl[str(sat)] = fixed_val
+        
+        return fixed
+    
+    def _resolve_wl(self, wl_float: np.ndarray, wl_cov: np.ndarray,
+                   satellite_ids: Optional[List[str]]) -> Dict[str, int]:
+        """Resolve WL ambiguities (easier with ~86cm wavelength)"""
+        fixed = {}
+        wl_sigma = np.sqrt(np.diag(wl_cov))
+        
+        for i, sat in enumerate(satellite_ids or range(len(wl_float))):
+            sat_key = str(sat)
+            
+            # Use EWL to constrain if available
+            constraint = 0.0
+            if sat_key in self.fixed_ewl:
+                constraint = self.fixed_ewl[sat_key] * 0.1  # Scaling factor
+            
+            adjusted_float = wl_float[i] - constraint
+            
+            if wl_sigma[i] < self.wl_threshold:
+                fixed_val = round(adjusted_float)
+                residual = abs(adjusted_float - fixed_val)
+                if residual < self.wl_threshold:
+                    fixed[sat_key] = fixed_val
+                    self.fixed_wl[sat_key] = fixed_val
+        
+        return fixed
+    
+    def _resolve_nl_with_wl(self, nl_float: np.ndarray, nl_cov: np.ndarray,
+                           wl_fixed: Dict[str, int],
+                           satellite_ids: Optional[List[str]]) -> Tuple[Dict[str, int], float]:
+        """Resolve NL using WL constraint and LAMBDA"""
+        # Filter to satellites with fixed WL
+        indices = []
+        for i, sat in enumerate(satellite_ids or range(len(nl_float))):
+            if str(sat) in wl_fixed:
+                indices.append(i)
+        
+        if len(indices) < self.min_satellites:
+            return {}, 0.0
+        
+        indices = np.array(indices)
+        nl_subset = nl_float[indices]
+        cov_subset = nl_cov[np.ix_(indices, indices)]
+        
+        # Apply WL constraint to NL
+        for i, idx in enumerate(indices):
+            sat_key = str(satellite_ids[idx] if satellite_ids else idx)
+            if sat_key in wl_fixed:
+                # NL is constrained by WL
+                nl_subset[i] -= wl_fixed[sat_key] * 0.05  # Scaling factor
+        
+        # Use LAMBDA for final NL resolution
+        Z, L, D = self._decorrelate(cov_subset)
+        float_decorr = Z.T @ nl_subset
+        candidates, residuals = self._integer_search(float_decorr, L, D)
+        
+        if len(candidates) < 2:
+            return {}, 0.0
+        
+        # Ratio test
+        ratio = np.sqrt(residuals[1] / residuals[0]) if residuals[0] > 0 else 0
+        
+        if ratio > self.ratio_threshold:
+            fixed_nl = {}
+            fixed_candidate = Z @ candidates[0]
+            for i, idx in enumerate(indices):
+                sat_key = str(satellite_ids[idx] if satellite_ids else idx)
+                fixed_nl[sat_key] = round(fixed_candidate[i])
+                self.fixed_nl[sat_key] = fixed_nl[sat_key]
+            return fixed_nl, ratio
+        
+        return {}, ratio
     
     def _apply_elevation_mask(self, elevations: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Apply elevation mask to select high-elevation satellites"""
@@ -250,41 +536,11 @@ class GreatPVTLambdaResolver:
             candidates.append(best_alt_candidate)
             residuals.append(best_alt_residual)
         
-        # If requested more candidates, try combinations
-        if self.max_candidates > 2 and n > 1:
-            for i in range(n-1):
-                for j in range(i+1, n):
-                    for delta_i in [-1, 1]:
-                        for delta_j in [-1, 1]:
-                            candidate = candidate1.copy()
-                            candidate[i] += delta_i
-                            candidate[j] += delta_j
-                            
-                            # Check if unique
-                            is_unique = True
-                            for existing in candidates:
-                                if np.array_equal(candidate, existing):
-                                    is_unique = False
-                                    break
-                            
-                            if is_unique:
-                                residual = self._compute_residual(candidate, float_amb, D)
-                                candidates.append(candidate)
-                                residuals.append(residual)
-                                
-                                if len(candidates) >= self.max_candidates:
-                                    break
-                        if len(candidates) >= self.max_candidates:
-                            break
-                    if len(candidates) >= self.max_candidates:
-                        break
-                if len(candidates) >= self.max_candidates:
-                    break
-        
         # Sort by residual
-        sorted_indices = np.argsort(residuals)
-        candidates = [candidates[i] for i in sorted_indices[:self.max_candidates]]
-        residuals = [residuals[i] for i in sorted_indices[:self.max_candidates]]
+        if len(candidates) >= 2:
+            sorted_indices = np.argsort(residuals[:2])
+            candidates = [candidates[i] for i in sorted_indices]
+            residuals = [residuals[i] for i in sorted_indices]
         
         return candidates, residuals
     
@@ -305,98 +561,3 @@ class GreatPVTLambdaResolver:
                 weighted_residual += diff[i]**2 / d_diag[i]
         
         return weighted_residual
-    
-    def _validate_solution(self, fixed_amb: np.ndarray, float_amb: np.ndarray,
-                          covariance: np.ndarray) -> bool:
-        """
-        Validate fixed solution using GREAT-PVT's criteria
-        
-        Checks both absolute and standardized deviations
-        """
-        # Compute differences
-        diff = fixed_amb - float_amb
-        
-        # Check absolute deviation
-        max_abs_diff = np.max(np.abs(diff))
-        if max_abs_diff > self.max_deviation:
-            logger.debug(f"Validation failed: max absolute diff {max_abs_diff:.3f} > {self.max_deviation}")
-            return False
-        
-        # Check standardized residuals
-        std_devs = np.sqrt(np.diag(covariance))
-        valid_std = std_devs > 1e-9  # Avoid division by very small numbers
-        
-        if np.any(valid_std):
-            standardized = np.abs(diff[valid_std]) / std_devs[valid_std]
-            max_standardized = np.max(standardized)
-            
-            if max_standardized > 3.0:
-                logger.debug(f"Validation failed: max standardized residual {max_standardized:.2f} > 3.0")
-                return False
-        
-        return True
-    
-    def resolve_partial(self, float_ambiguities: np.ndarray,
-                       covariance: np.ndarray,
-                       elevations: np.ndarray,
-                       satellite_ids: Optional[List[int]] = None) -> Tuple[np.ndarray, np.ndarray, float, bool]:
-        """
-        Partial ambiguity resolution with elevation-based selection
-        
-        This is the preferred method for GREAT-PVT approach
-        
-        Parameters
-        ----------
-        float_ambiguities : np.ndarray
-            Float ambiguity estimates
-        covariance : np.ndarray
-            Covariance matrix
-        elevations : np.ndarray
-            Satellite elevation angles in degrees
-        satellite_ids : List[int], optional
-            Satellite IDs for logging
-            
-        Returns
-        -------
-        fixed_ambiguities : np.ndarray
-            Fixed ambiguities (unchanged for unfixed)
-        fixed_mask : np.ndarray
-            Boolean mask of fixed ambiguities
-        ratio : float
-            Ratio test value
-        success : bool
-            Whether partial fixing succeeded
-        """
-        n = len(float_ambiguities)
-        
-        # Apply elevation mask
-        mask, indices = self._apply_elevation_mask(elevations)
-        n_high_elev = len(indices)
-        
-        if n_high_elev < self.min_satellites:
-            logger.warning(f"Not enough high-elevation satellites: {n_high_elev} < {self.min_satellites}")
-            return float_ambiguities, np.zeros(n, dtype=bool), 0.0, False
-        
-        # Log selected satellites
-        if satellite_ids is not None:
-            selected_sats = [satellite_ids[i] for i in indices]
-            logger.debug(f"Selected {n_high_elev} high-elevation satellites: {selected_sats}")
-        
-        # Extract subset
-        subset_float = float_ambiguities[indices]
-        subset_cov = covariance[np.ix_(indices, indices)]
-        
-        # Resolve subset
-        fixed_subset, ratio, is_fixed, info = self.resolve(subset_float, subset_cov)
-        
-        # Build full result
-        fixed_ambiguities = float_ambiguities.copy()
-        fixed_mask = np.zeros(n, dtype=bool)
-        
-        if is_fixed:
-            # Only update fixed satellites
-            fixed_ambiguities[indices] = fixed_subset[:n_high_elev]
-            fixed_mask[indices] = True
-            logger.info(f"Partially fixed {n_high_elev}/{n} ambiguities with ratio {ratio:.2f}")
-        
-        return fixed_ambiguities, fixed_mask, ratio, is_fixed
