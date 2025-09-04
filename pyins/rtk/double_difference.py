@@ -40,7 +40,7 @@ class DoubleDifferenceProcessor:
     def form_double_differences(self,
                               rover_obs: list[Observation],
                               base_obs: list[Observation],
-                              frequency_idx: int = 0) -> tuple[np.ndarray, np.ndarray, list[tuple[int, int]], dict[int, int]]:
+                              frequency_idx: Optional[int] = None) -> tuple:
         """
         Form double difference observations with per-system reference satellites
 
@@ -50,18 +50,58 @@ class DoubleDifferenceProcessor:
             Rover observations
         base_obs : List[Observation]
             Base station observations
+        frequency_idx : int, optional
+            Frequency index to process. If None, process all available frequencies
 
         Returns:
         --------
-        dd_pseudorange : np.ndarray
-            Double difference pseudorange (m)
-        dd_carrier : np.ndarray
-            Double difference carrier phase (cycles)
-        sat_pairs : List[Tuple[int, int]]
-            List of (reference_sat, other_sat) pairs
-        ref_sats_used : Dict[int, int]
-            Reference satellites used for each system
+        If frequency_idx is specified:
+            dd_pseudorange : np.ndarray - Double difference pseudorange (m)
+            dd_carrier : np.ndarray - Double difference carrier phase (cycles)
+            sat_pairs : List[Tuple[int, int]] - List of (reference_sat, other_sat) pairs
+            ref_sats_used : Dict[int, int] - Reference satellites used for each system
+        
+        If frequency_idx is None (all frequencies):
+            dd_pseudorange : Dict[int, np.ndarray] - DD pseudorange per frequency
+            dd_carrier : Dict[int, np.ndarray] - DD carrier phase per frequency  
+            sat_pairs : Dict[int, List[Tuple[int, int]]] - Sat pairs per frequency
+            ref_sats_used : Dict[int, Dict[int, int]] - Reference sats per frequency/system
         """
+        # If frequency_idx is None, process all frequencies
+        if frequency_idx is None:
+            # Detect available frequencies
+            max_freqs = 0
+            for obs in rover_obs:
+                if hasattr(obs, 'P') and len(obs.P) > max_freqs:
+                    max_freqs = len(obs.P)
+            
+            # Process each frequency
+            all_dd_pr = {}
+            all_dd_cp = {}
+            all_sat_pairs = {}
+            all_ref_sats = {}
+            
+            for freq_idx in range(max_freqs):
+                # Check if this frequency has valid observations
+                has_freq = False
+                for obs in rover_obs:
+                    if freq_idx < len(obs.P) and obs.P[freq_idx] > 0:
+                        has_freq = True
+                        break
+                
+                if has_freq:
+                    dd_pr, dd_cp, sat_pairs, ref_sats = self.form_double_differences(
+                        rover_obs, base_obs, freq_idx
+                    )
+                    
+                    if len(dd_pr) > 0:
+                        all_dd_pr[freq_idx] = dd_pr
+                        all_dd_cp[freq_idx] = dd_cp
+                        all_sat_pairs[freq_idx] = sat_pairs
+                        all_ref_sats[freq_idx] = ref_sats
+            
+            return (all_dd_pr, all_dd_cp, all_sat_pairs, all_ref_sats)
+        
         # Group satellites by system
         rover_by_system = self._group_by_system(rover_obs)
         base_by_system = self._group_by_system(base_obs)
