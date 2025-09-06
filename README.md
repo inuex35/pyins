@@ -7,12 +7,10 @@ PyINS is a comprehensive GNSS/IMU processing library for satellite positioning, 
 ### GNSS Processing
 - **Multi-constellation support**: GPS, Galileo, BeiDou, GLONASS, QZSS
 - **RINEX file I/O**: Observation and navigation file parsing using gnsspy
-- **Robust Single Point Positioning (SPP)**: With iterative least squares, troposphere modeling, and multi-GNSS support
-- **RTK (Real-Time Kinematic)**: Double difference processing with data synchronization and interpolation
-- **Ephemeris handling**: Satellite selection and position computation with time-safe ephemeris
-- **SP3 Precise Ephemeris**: Support for IGS and MGEX precise orbit products with 40-80x accuracy improvement
-- **Time management**: Unified TimeCore system for all GNSS time systems with automatic conversions
-- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA, MLAMBDA, and other methods)
+- **RTKLIB-compatible frequency mapping**: L[0]=L1/E1/B1, L[1]=L2/E5b/B2, L[2]=L5/E5a/B3
+- **RTK (Real-Time Kinematic)**: Double difference processing with reference satellite selection
+- **Carrier phase processing**: Cycle slip detection and ambiguity resolution (LAMBDA/MLAMBDA)
+- **Observable combinations**: Ionosphere-free, wide-lane, narrow-lane combinations
 
 ### Sensor Fusion & IMU
 - **IMU mechanization**: Preintegration and bias estimation
@@ -51,370 +49,180 @@ gnsspy
 
 ## Quick Start
 
-### Single Point Positioning (SPP)
+### GNSS Frequency Calculations
 ```python
-from pyins.io.rinex import RinexObsReader, RinexNavReader
-from pyins.gnss import robust_spp_solve
-from pyins.coordinate import ecef2llh
-import numpy as np
+from pyins.io.rinex import RinexObsReader
+from pyins.gnss.frequency import sat2freq
+from pyins.core.constants import CLIGHT
 
-# Read RINEX files
-obs_reader = RinexObsReader('rover.obs')
-nav_reader = RinexNavReader('navigation.nav')
+# Load RINEX observation file
+reader = RinexObsReader('data/main.obs')
+epochs = reader.read()[:1]  # Read first epoch
 
-obs_data = obs_reader.read()
-nav_data = nav_reader.read()
+observations = epochs[0]['observations']
 
-# Process first epoch
-epoch = obs_data[0]
-observations = epoch['observations']
+# Process GPS satellites
+gps_obs = [o for o in observations if o.system == 1]
 
-# Solve for position using robust SPP
-solution = robust_spp_solve(
-    observations, 
-    nav_data,
-    systems_to_use=['G', 'E', 'C']  # GPS, Galileo, BeiDou
-)
+for obs in gps_obs[:3]:
+    if obs.L[0] != 0:  # L1 at index 0 (RTKLIB-compatible)
+        # Calculate L1 frequency and wavelength
+        freq_l1 = sat2freq(obs.sat, 0)
+        wavelength_l1 = CLIGHT / freq_l1
+        
+        # Convert carrier phase to distance
+        phase_cycles = obs.L[0]
+        distance = phase_cycles * wavelength_l1
+        
+        print(f"PRN {obs.sat}:")
+        print(f"  L1 phase: {phase_cycles:.3f} cycles")
+        print(f"  Distance: {distance:.3f} m")
+```
 
-if solution and solution.valid:
-    llh = ecef2llh(solution.rr)
-    print(f"Position: lat={np.rad2deg(llh[0]):.6f}°, "
-          f"lon={np.rad2deg(llh[1]):.6f}°, h={llh[2]:.1f}m")
+### Observable Combinations
+```python
+from pyins.io.rinex import RinexObsReader
+from pyins.core.constants import CLIGHT, FREQ_L1, FREQ_L2
+
+# Load RINEX file
+reader = RinexObsReader('data/main.obs')
+epochs = reader.read()[:1]
+observations = epochs[0]['observations']
+
+# Find dual-frequency GPS observations
+gps_dual = [o for o in observations 
+            if o.system == 1 and o.L[0] != 0 and o.L[1] != 0]
+
+for obs in gps_dual[:1]:
+    # Frequencies and wavelengths
+    f1, f2 = FREQ_L1, FREQ_L2
+    lambda1 = CLIGHT / f1
+    lambda2 = CLIGHT / f2
+    
+    # Phase in meters
+    L1_m = obs.L[0] * lambda1
+    L2_m = obs.L[1] * lambda2
+    
+    # Ionosphere-free combination
+    alpha = (f1**2) / (f1**2 - f2**2)
+    beta = (f2**2) / (f1**2 - f2**2)
+    IF_phase = alpha * L1_m - beta * L2_m
+    
+    # Wide-lane combination
+    WL_phase = (f1 * L1_m - f2 * L2_m) / (f1 - f2)
+    WL_wavelength = CLIGHT / (f1 - f2)
+    
+    print(f"PRN {obs.sat}:")
+    print(f"  Ionosphere-free: {IF_phase:.3f} m")
+    print(f"  Wide-lane: {WL_phase:.3f} m")
+    print(f"  WL wavelength: {WL_wavelength:.3f} m")
 ```
 
 ### RTK Double Difference
 ```python
-from pyins.rtk import DoubleDifferenceProcessor, DDLeastSquares, interpolate_epoch
-from pyins.io.rinex import RinexObsReader, RinexNavReader
-from pyins.coordinate import ecef2llh, ecef2enu
+from pyins.rtk.double_difference import DoubleDifferenceProcessor
+from pyins.io.rinex import RinexObsReader
 
-# Read rover and base data
-rover_obs = RinexObsReader('rover.obs').read()
-base_obs = RinexObsReader('base.obs').read()
-nav_data = RinexNavReader('nav.nav').read()
+# Load rover and base observations
+rover_reader = RinexObsReader('data/main.obs')
+base_reader = RinexObsReader('data/base.obs')
 
-# Initialize processors
-dd_processor = DoubleDifferenceProcessor()
-dd_solver = DDLeastSquares()
+rover_epochs = rover_reader.read()[:1]
+base_epochs = base_reader.read()[:1]
 
-# Synchronize and interpolate data
-rover_epoch = rover_obs[0]
-base_epoch = interpolate_epoch(base_obs, rover_epoch['time'])
+rover_obs = rover_epochs[0]['observations']
+base_obs = base_epochs[0]['observations']
 
-# Process double differences
-dd_obs = dd_processor.process(
-    rover_epoch['observations'],
-    base_epoch['observations'],
-    nav_data
-)
+# Filter to GPS
+gps_rover = [o for o in rover_obs if o.system == 1][:5]
+gps_base = [o for o in base_obs if o.system == 1][:5]
 
-# Solve for baseline
-baseline = dd_solver.solve(dd_obs, base_position_ecef)
+# Find common satellites
+rover_sats = {o.sat for o in gps_rover}
+base_sats = {o.sat for o in gps_base}
+common = rover_sats & base_sats
+
+if len(common) >= 2:
+    rover_common = [o for o in gps_rover if o.sat in common]
+    base_common = [o for o in gps_base if o.sat in common]
+    
+    # Form double differences
+    dd_processor = DoubleDifferenceProcessor()
+    dd_data = dd_processor.form_double_differences(
+        rover_common, base_common, frequency_idx=0  # L1
+    )
+    
+    if dd_data:
+        dd_pr, dd_cp, pairs, refs = dd_data
+        print(f"Reference satellite: {refs}")
+        print(f"DD observations: {len(dd_pr)}")
+        print(f"First DD phase: {dd_cp[0]:.3f} cycles")
 ```
 
-### SP3 Precise Ephemeris
+### LAMBDA Ambiguity Resolution
 ```python
-from pyins.gnss.sp3_ephemeris import SP3Ephemeris
-from pyins.gnss.ephemeris import compute_satellite_position
-from datetime import datetime
+from pyins.rtk.lambda_rtklib import mlambda
+import numpy as np
 
-# Initialize SP3 handler (defaults to MGEX for multi-GNSS)
-sp3 = SP3Ephemeris()
+# Float ambiguities (close to integers)
+float_amb = np.array([10.3, -5.7, 15.1])
 
-# Download SP3 automatically (MGEX COD by default)
-sp3_file = sp3.download_sp3(datetime(2024, 1, 15))
+# Covariance matrix
+Q = np.diag([0.01, 0.02, 0.015])
 
-# Or get best available product
-sp3_file = sp3.get_auto_sp3(datetime.now(), prefer_mgex=True)
+# Solve with LAMBDA
+fixed_amb, residuals = mlambda(float_amb, Q, m=2)
 
-# Read SP3 data
-sp3_data = sp3.read_sp3(sp3_file)
+print(f"Float ambiguities: {float_amb}")
+print(f"Fixed ambiguities: {fixed_amb[:,0].astype(int)}")
+print(f"Residuals: {residuals}")
 
-# Interpolate satellite position (RTKLIB-compatible Neville method)
-from pyins.core.unified_time import TimeCore
-time = TimeCore.from_gps(2200, 345600.0)
-pos, clk = sp3.interpolate_position(sat_num=1, time=time, method='neville')
-
-# Unified interface for broadcast/SP3 ephemeris
-# Automatically uses SP3 if available, falls back to broadcast
-pos, clk, var = compute_satellite_position(
-    sat_num=1, 
-    time=time,
-    nav_or_sp3=sp3_data,  # Can be nav_data or sp3_data
-    prefer_mgex=True       # Prefer MGEX for multi-GNSS
-)
-```
-
-### Time Management with TimeCore
-```python
-from pyins.core.unified_time import TimeCore, TimeSystem
-
-# Create from various formats
-tc = TimeCore.from_gps(2200, 345600.0)      # GPS week/TOW
-tc = TimeCore.from_unix(1700000000)         # Unix timestamp
-tc = TimeCore.from_auto(gps_seconds)        # Auto-detect
-
-# Convert between formats
-gps_sec = tc.get_gps_seconds()
-week, tow = tc.get_gps_week_tow()
-unix = tc.get_unix()
-
-# System-specific time
-gps_tow = tc.get_tow(TimeSystem.GPS)
-bds_tow = tc.get_tow(TimeSystem.BDS)  # BeiDou time
-
-# Time arithmetic
-tc2 = tc + 3600  # Add 1 hour
-dt = tc2 - tc    # Difference in seconds
-```
-
-### Factor Graph Optimization
-```python
-from pyins.fusion.graph_optimizer import FactorGraph
-from pyins.fusion.pseudorange_factor import PseudorangeFactor
-from pyins.fusion.doppler_factor import DopplerFactor
-from pyins.fusion.state import NavigationState
-
-# Create factor graph
-graph = FactorGraph()
-
-# Create navigation state
-state = NavigationState()
-
-# Add pseudorange factor
-pr_factor = PseudorangeFactor(
-    observation=observation,
-    satellite_info=sat_info,
-    weight=1.0/pr_variance
-)
-
-# Add Doppler factor  
-doppler_factor = DopplerFactor(
-    measurement=doppler_obs,
-    satellite_velocity=sat_vel,
-    weight=1.0/doppler_variance
-)
-
-graph.add_factor(pr_factor)
-graph.add_factor(doppler_factor)
-
-# Optimize
-result = graph.optimize()
-```
-
-## Ambiguity Resolution Methods
-
-PyINS supports multiple integer ambiguity resolution methods for RTK processing:
-
-### LAMBDA Method
-```python
-from pyins.rtk.ambiguity_resolution import AmbiguityResolver
-
-resolver = AmbiguityResolver(method='lambda')
-fixed_ambiguities, ratio = resolver.resolve_ambiguities(
-    float_ambiguities=N_float,
-    covariance=Q_N,
-    ratio_threshold=3.0
-)
-```
-
-### MLAMBDA Method (Modified LAMBDA)
-```python
-resolver = AmbiguityResolver(method='mlambda')
-fixed_ambiguities, ratio = resolver.resolve_ambiguities(
-    float_ambiguities=N_float,
-    covariance=Q_N,
-    search_space=2  # Search n-best candidates
-)
-```
-
-### Other Methods
-- **Rounding**: Simple integer rounding
-- **Bootstrapping**: Sequential conditional rounding
-- **ILS (Integer Least Squares)**: Optimal search
-- **PAR (Partial Ambiguity Resolution)**: Fix subset of ambiguities
-- **GREAT-PVT**: Fast partial resolution for real-time applications
-
-## Module Structure
-
-```
-pyins/
-├── core/           # Core utilities and constants
-│   ├── constants.py
-│   ├── unified_time.py
-│   └── satellite_numbering.py
-├── gnss/           # GNSS processing
-│   ├── spp.py      # Single Point Positioning
-│   ├── ephemeris.py
-│   ├── sp3_ephemeris.py     # SP3 precise ephemeris
-│   ├── sp3_downloader_ftp.py # SP3/CLK downloader
-│   ├── sp3_interpolation.py  # Neville interpolation
-│   └── frequency.py
-├── rtk/            # RTK processing
-│   ├── double_difference.py
-│   ├── ambiguity_resolution.py
-│   ├── mlambda.py
-│   └── cycle_slip.py
-├── fusion/         # Sensor fusion
-│   ├── ekf.py
-│   ├── graph_optimizer.py
-│   └── pseudorange_factor.py
-├── coordinate/     # Coordinate transformations
-│   ├── transforms.py
-│   └── geodetic.py
-├── sensors/        # Sensor models
-│   ├── imu.py
-│   └── lever_arm.py
-└── io/             # File I/O
-    └── rinex.py
+# Check success
+expected = np.array([10, -6, 15])
+if np.allclose(fixed_amb[:,0], expected, atol=1):
+    print("✓ LAMBDA resolution successful!")
 ```
 
 ## Examples
 
-### Basic Examples
+See the `examples/` directory for complete working examples:
+
+- **GNSS Processing**
+  - `gnss/example_gnss_processing.py` - Frequency calculations with real RINEX data
+  - `gnss/example_observables.py` - Observable combinations (IF, WL, NL)
+  - `gnss/example_satellite_positions.py` - Satellite position calculations
+
+- **RTK Processing**
+  - `rtk/example_double_difference.py` - Double difference with synthetic data
+  - `rtk/example_lambda.py` - LAMBDA ambiguity resolution
+
+Run all examples:
 ```bash
-# Multi-GNSS SPP processing
-python pyins/examples/multi_gnss_spp.py
-
-# SPP with TimeCore integration
-python pyins/examples/spp_with_timecore.py
-
-# SPP with SP3 precise ephemeris
-python pyins/examples/spp_with_sp3.py
-
-# RTK Double Difference
-python examples/rtk_double_difference_example.py
-
-# Robot lever arm configuration
-python examples/robot_lever_arm_usage.py
-
-# Factor graph with weighted measurements
-python examples/weighted_factor_usage.py
+python examples/run_all_examples.py
 ```
 
-## Satellite Numbering Convention
+## Project Structure
 
-PyINS uses internal satellite numbering:
-- GPS: 1-32 (G01-G32)
-- GLONASS: 65-88 (R01-R24)
-- Galileo: 97-132 (E01-E36)
-- BeiDou: 141-177 (C01-C37)
-- QZSS: 210-216 (J01-J07)
-
-```python
-from pyins.core.constants import sat2sys, sys2char, sat2prn
-
-sat = 141  # Internal number for C01
-sys = sat2sys(sat)        # Returns SYS_CMP (BeiDou)
-sys_char = sys2char(sys)  # Returns 'C'
-prn = sat2prn(sat)        # Returns 1
 ```
-
-## SP3 Precise Ephemeris Support
-
-### Accuracy Improvement
-SP3 precise ephemeris provides 40-80x better orbit accuracy compared to broadcast ephemeris:
-- **Broadcast ephemeris**: 1-2 meters orbit accuracy
-- **IGS Final SP3**: 2.5 cm (80x improvement)
-- **IGS Rapid SP3**: 5 cm (40x improvement)
-- **Clock accuracy**: 5-7 ns → 0.1-0.2 ns
-
-### Product Types
-PyINS supports both GPS-only and Multi-GNSS SP3 products:
-
-| Product | Systems | Satellites | Latency | Accuracy |
-|---------|---------|------------|---------|----------|
-| IGS Final | GPS | 32 | 12-18 days | ~2.5 cm |
-| IGS Rapid | GPS | 32 | 17 hours | ~5 cm |
-| COD MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 2-3 days | ~5 cm |
-| GFZ MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 1-2 days | ~5 cm |
-| WUM MGEX | GPS+GLO+GAL+BDS+QZS | 100+ | 2-3 days | ~5 cm |
-
-### Default Configuration
-PyINS defaults to MGEX products (COD) for multi-GNSS support. To use GPS-only products:
-```python
-sp3.download_sp3(date, product='igs')  # GPS-only IGS Final
+pyins/
+├── core/          # Core data structures and constants
+├── gnss/          # GNSS processing algorithms
+├── rtk/           # RTK and ambiguity resolution
+├── coordinate/    # Coordinate transformations
+├── sensors/       # IMU and sensor fusion
+├── io/            # RINEX and data I/O
+└── examples/      # Working examples
 ```
-
-### Interpolation Methods
-- **Neville** (default): RTKLIB-compatible polynomial interpolation
-- **Polyfit**: NumPy polynomial fitting
-- **Lagrange**: SciPy Lagrange interpolation
-- **Cubic Spline**: Smooth spline interpolation
-
-## Multi-GNSS Considerations
-
-### BeiDou Time System
-BeiDou uses BDT with a 14-second offset from GPS time, handled automatically by TimeCore.
-
-### GLONASS Notes
-- Uses FDMA with inter-frequency bias (IFB)
-- Excluded by default in SPP due to IFB issues
-- Can be included with `systems_to_use=['G', 'R', 'E', 'C']`
-
-## API Reference
-
-### Key Classes
-
-#### SP3Ephemeris
-Precise ephemeris handler with automatic download and interpolation.
-- Downloads from IGS/MGEX FTP servers
-- Supports multiple interpolation methods
-- RTKLIB-compatible Neville interpolation
-- Automatic product selection based on data age
-
-#### TimeCore
-Unified time management for all GNSS systems.
-
-#### FactorGraph
-Factor graph optimization for sensor fusion with pseudorange and Doppler factors.
-
-#### DoubleDifferenceProcessor
-RTK double difference processing with per-system reference satellites.
-
-#### RobotLeverArm
-Flexible lever arm management for multi-sensor robots.
-
-#### AmbiguityResolver
-Integer ambiguity resolution with multiple methods (LAMBDA, MLAMBDA, ILS, etc.)
 
 ## Contributing
 
-Contributions are welcome! Please submit pull requests or open issues on GitHub.
+Contributions are welcome! Please feel free to submit pull requests.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+MIT License
 
-## Acknowledgments and Third-Party Licenses
+## Acknowledgments
 
-### RTKLIB Attribution
-
-This software includes algorithms and concepts inspired by [RTKLIB](https://github.com/tomojitakasu/RTKLIB), an open-source GNSS positioning library.
-
-```
-RTKLIB: An Open Source Program Package for GNSS Positioning
-Copyright (c) 2007-2013, T. Takasu, All rights reserved.
-
-RTKLIB is distributed under the BSD 2-clause license.
-```
-
-We acknowledge the significant contributions of RTKLIB to the GNSS community and thank T. Takasu for making this valuable software available as open source.
-
-### Other References
-
-- **gnss-py**: GNSS processing in Python
-- **rtklib-py**: Python wrapper for RTKLIB
-
-The PyINS library reimplements and extends concepts from these projects while maintaining compatibility with standard GNSS processing workflows.
-
-## Citation
-
-If you use PyINS in your research, please cite:
-```
-@software{pyins,
-  title = {PyINS: Python GNSS/INS Processing Library},
-  url = {https://github.com/inuex35/pyins},
-  year = {2024}
-}
-```
+- RTKLIB for reference implementations
+- gnsspy for RINEX parsing capabilities
