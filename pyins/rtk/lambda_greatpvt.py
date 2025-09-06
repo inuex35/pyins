@@ -14,6 +14,7 @@ from typing import Tuple, Optional, List, Dict, Union
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from scipy.special import erf, erfc
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,12 @@ class GreatPVTLambdaResolver:
                  wl_threshold: float = 0.25,  # cycles
                  nl_threshold: float = 0.15,  # cycles
                  ewl_threshold: float = 0.30,  # cycles
-                 enable_multifreq: bool = True):
+                 enable_multifreq: bool = True,
+                 # Bootstrapping parameters (from GREAT-PVT)
+                 bootstrap_threshold: float = 0.999,  # Bootstrapping success rate threshold
+                 bdeci_cutdev: float = 0.15,  # Deviation threshold for bdeci
+                 bdeci_cutsig: float = 0.15,  # Sigma threshold for bdeci
+                 bdeci_alpha: float = 1000.0):  # Decision threshold for bdeci
         """
         Initialize multi-frequency GREAT-PVT LAMBDA resolver
         
@@ -100,6 +106,12 @@ class GreatPVTLambdaResolver:
         self.nl_threshold = nl_threshold
         self.ewl_threshold = ewl_threshold
         self.enable_multifreq = enable_multifreq
+        
+        # Bootstrapping parameters (from GREAT-PVT)
+        self.bootstrap_threshold = bootstrap_threshold
+        self.bdeci_cutdev = bdeci_cutdev
+        self.bdeci_cutsig = bdeci_cutsig
+        self.bdeci_alpha = bdeci_alpha
         
         # Store fixed ambiguities for cascaded resolution
         self.fixed_wl: Dict[str, int] = {}
@@ -314,6 +326,19 @@ class GreatPVTLambdaResolver:
         Z, L, D = self._decorrelate(cov_subset)
         info['decorrelated'] = True
         
+        # Compute bootstrapping success rate
+        boot_rate = self._compute_bootstrapping_rate(D)
+        info['bootstrapping_rate'] = boot_rate
+        
+        # Check bootstrapping threshold
+        if boot_rate < self.bootstrap_threshold:
+            logger.debug(f"Bootstrapping rate too low: {boot_rate:.3f} < {self.bootstrap_threshold}")
+            info['bootstrap_passed'] = False
+            # Don't proceed with integer search if bootstrapping fails
+            return float_ambiguities, 0.0, False, info
+        
+        info['bootstrap_passed'] = True
+        
         # Transform float ambiguities
         float_decorr = Z.T @ float_subset
         
@@ -339,14 +364,32 @@ class GreatPVTLambdaResolver:
         
         if is_fixed:
             fixed_subset = np.round(fixed_candidates[0]).astype(int)
-            info['validated'] = True
             
-            # Build full solution
-            fixed_ambiguities = float_ambiguities.copy()
-            fixed_ambiguities[subset_indices] = fixed_subset
+            # Additional validation using bdeci for each ambiguity
+            sigmas = np.sqrt(np.diag(cov_subset))
             
-            logger.info(f"Ambiguities fixed with ratio: {ratio:.2f}")
-            return fixed_ambiguities.astype(int), ratio, True, info
+            bdeci_passed = True
+            bdeci_results = []
+            for i in range(len(float_subset)):
+                prob, deci = self._bdeci(float_subset[i], sigmas[i])
+                bdeci_results.append({'prob': prob, 'deci': deci})
+                if deci < self.bdeci_alpha:
+                    bdeci_passed = False
+            
+            info['bdeci_results'] = bdeci_results
+            info['bdeci_passed'] = bdeci_passed
+            info['validated'] = bdeci_passed
+            
+            if bdeci_passed:
+                # Build full solution
+                fixed_ambiguities = float_ambiguities.copy()
+                fixed_ambiguities[subset_indices] = fixed_subset
+                
+                logger.info(f"Ambiguities fixed with ratio: {ratio:.2f}, bdeci passed")
+                return fixed_ambiguities.astype(int), ratio, True, info
+            else:
+                logger.debug(f"BDECI validation failed despite ratio test passing")
+                return float_ambiguities, ratio, False, info
         else:
             logger.debug(f"Ratio test failed: {ratio:.2f} < {self.ratio_threshold}")
             return float_ambiguities, ratio, False, info
@@ -391,7 +434,7 @@ class GreatPVTLambdaResolver:
     
     def _resolve_wl(self, wl_float: np.ndarray, wl_cov: np.ndarray,
                    satellite_ids: Optional[List[str]]) -> Dict[str, int]:
-        """Resolve WL ambiguities (easier with ~86cm wavelength)"""
+        """Resolve WL ambiguities using bdeci validation (GREAT-PVT approach)"""
         fixed = {}
         wl_sigma = np.sqrt(np.diag(wl_cov))
         
@@ -405,12 +448,16 @@ class GreatPVTLambdaResolver:
             
             adjusted_float = wl_float[i] - constraint
             
-            if wl_sigma[i] < self.wl_threshold:
+            # Use bdeci for validation (GREAT-PVT approach)
+            prob, deci = self._bdeci(adjusted_float, wl_sigma[i])
+            
+            if deci >= self.bdeci_alpha:  # bdeci test passed
                 fixed_val = round(adjusted_float)
-                residual = abs(adjusted_float - fixed_val)
-                if residual < self.wl_threshold:
-                    fixed[sat_key] = fixed_val
-                    self.fixed_wl[sat_key] = fixed_val
+                fixed[sat_key] = fixed_val
+                self.fixed_wl[sat_key] = fixed_val
+                logger.debug(f"WL fixed for {sat_key}: {fixed_val} (deci={deci:.2f}, prob={prob:.3f})")
+            else:
+                logger.debug(f"WL not fixed for {sat_key}: deci={deci:.2f} < {self.bdeci_alpha}")
         
         return fixed
     
@@ -561,3 +608,127 @@ class GreatPVTLambdaResolver:
                 weighted_residual += diff[i]**2 / d_diag[i]
         
         return weighted_residual
+    
+    def _compute_bootstrapping_rate(self, D: np.ndarray) -> float:
+        """
+        Compute bootstrapping success rate based on GREAT-PVT implementation
+        
+        Parameters
+        ----------
+        D : np.ndarray
+            Diagonal matrix from LDLT decomposition
+        
+        Returns
+        -------
+        float
+            Bootstrapping success rate (0-1)
+        """
+        n = D.shape[0]
+        boot_rate = 1.0
+        
+        for i in range(n):
+            if D[i, i] > 0:
+                sigma = np.sqrt(D[i, i])
+                # Compute probability of correct rounding
+                # Using approximation from GREAT-PVT
+                prob = self._compute_rounding_probability(sigma)
+                boot_rate *= prob
+        
+        return boot_rate
+    
+    def _compute_rounding_probability(self, sigma: float) -> float:
+        """
+        Compute probability of correct rounding for given sigma
+        Based on GREAT-PVT's pBootStrapping function
+        
+        Parameters
+        ----------
+        sigma : float
+            Standard deviation in cycles
+        
+        Returns
+        -------
+        float
+            Probability of correct rounding
+        """
+        if sigma <= 0:
+            return 1.0
+        
+        # Using error function approximation
+        # P(correct) = 2*Φ(0.5/σ) - 1
+        # where Φ is the cumulative distribution function of standard normal
+        
+        # Convert to probability using error function
+        # erf(x/√2) = 2*Φ(x) - 1
+        x = 0.5 / (sigma * np.sqrt(2))
+        prob = 0.5 * (1 + erf(x))
+        
+        return prob
+    
+    def _bdeci(self, estimate: float, sigma: float, ih: int = 1) -> Tuple[float, float]:
+        """
+        Bootstrapping decision function based on GREAT-PVT's t_gbdeci::bdeci
+        
+        Parameters
+        ----------
+        estimate : float
+            Float ambiguity estimate
+        sigma : float
+            Standard deviation of estimate
+        ih : int
+            Control for ambiguity (1 for full cycle, 2 for half cycle)
+        
+        Returns
+        -------
+        prob : float
+            Probability of correct fixing
+        deci : float
+            Decision value (compared with threshold)
+        """
+        # Round to nearest integer
+        bint = round(estimate * ih) / ih
+        deviation = abs(bint - estimate)
+        
+        cutdev = self.bdeci_cutdev
+        if ih == 2:
+            cutdev *= 0.5
+        
+        # Check if deviation is too large
+        if deviation >= cutdev:
+            return 1.0, 0.0
+        
+        # Compute taper function
+        term1 = 1.0 - deviation / cutdev
+        term2 = max(0, (self.bdeci_cutsig - sigma) * 3.0)
+        taper = term1 * term1 * term2
+        
+        # Compute cumulative probability
+        s1 = 1.0 / (sigma * np.sqrt(2))
+        c = 0.0
+        
+        for j in range(1, 51):  # Check up to 50 cycles away
+            a1 = float(j)
+            b1 = (a1 - deviation) * s1
+            b2 = (a1 + deviation) * s1
+            
+            if 0 <= b1 <= 15:
+                erfcb1 = erfc(b1)
+            else:
+                erfcb1 = 0.0
+                
+            if 0 <= b2 <= 15:
+                erfcb2 = erfc(b2)
+            else:
+                erfcb2 = 0.0
+            
+            d1 = erfcb1 - erfcb2
+            c += d1
+            
+            if d1 < 1e-9:  # Negligible contribution
+                break
+        
+        prob = 1.0 - c
+        c = max(c, 1e-9)  # Avoid division by zero
+        deci = taper / c
+        
+        return prob, deci
