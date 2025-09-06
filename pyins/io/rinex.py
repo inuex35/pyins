@@ -236,23 +236,54 @@ class RinexObsReader:
                                     obs.P[freq_idx] = float(sat_data[signal_code])
                                     break
                             
-                            # Try corresponding carrier phase (replace C with L, P with L)
+                            # Try corresponding carrier phase
+                            # For carrier phase, we need to handle the conversion correctly:
+                            # C1C -> L1C (not L1L), C2W -> L2W, P1 -> L1, etc.
                             for signal_code in signal_list:
-                                phase_code = signal_code.replace('C', 'L').replace('P', 'L')
+                                if signal_code.startswith('C'):
+                                    # C1C -> L1C, C2W -> L2W, etc.
+                                    phase_code = 'L' + signal_code[1:]
+                                elif signal_code.startswith('P'):
+                                    # P1 -> L1, P2 -> L2
+                                    phase_code = 'L' + signal_code[1:]
+                                else:
+                                    # For other codes, try direct L replacement
+                                    phase_code = signal_code.replace('C', 'L').replace('P', 'L')
+                                    
                                 if phase_code in sat_data and not pd.isna(sat_data[phase_code]):
                                     obs.L[freq_idx] = float(sat_data[phase_code])
                                     break
                             
-                            # Try corresponding Doppler (replace C with D, P with D)
+                            # Try corresponding Doppler
+                            # For Doppler, we need similar conversion: C1C -> D1C, etc.
                             for signal_code in signal_list:
-                                doppler_code = signal_code.replace('C', 'D').replace('P', 'D')
+                                if signal_code.startswith('C'):
+                                    # C1C -> D1C, C2W -> D2W, etc.
+                                    doppler_code = 'D' + signal_code[1:]
+                                elif signal_code.startswith('P'):
+                                    # P1 -> D1, P2 -> D2
+                                    doppler_code = 'D' + signal_code[1:]
+                                else:
+                                    # For other codes, try direct D replacement
+                                    doppler_code = signal_code.replace('C', 'D').replace('P', 'D')
+                                    
                                 if doppler_code in sat_data and not pd.isna(sat_data[doppler_code]):
                                     obs.D[freq_idx] = float(sat_data[doppler_code])
                                     break
                             
-                            # Try corresponding SNR (replace C with S, P with S)
+                            # Try corresponding SNR
+                            # For SNR, we need similar conversion: C1C -> S1C, etc.
                             for signal_code in signal_list:
-                                snr_code = signal_code.replace('C', 'S').replace('P', 'S')
+                                if signal_code.startswith('C'):
+                                    # C1C -> S1C, C2W -> S2W, etc.
+                                    snr_code = 'S' + signal_code[1:]
+                                elif signal_code.startswith('P'):
+                                    # P1 -> S1, P2 -> S2
+                                    snr_code = 'S' + signal_code[1:]
+                                else:
+                                    # For other codes, try direct S replacement
+                                    snr_code = signal_code.replace('C', 'S').replace('P', 'S')
+                                    
                                 if snr_code in sat_data and not pd.isna(sat_data[snr_code]):
                                     obs.SNR[freq_idx] = float(sat_data[snr_code])
                                     break
