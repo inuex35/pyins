@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from scipy.special import erf, erfc
+from ..utils.ambiguity import lambda_reduction, lambda_search
 
 logger = logging.getLogger(__name__)
 
@@ -215,9 +216,15 @@ class GreatPVTLambdaResolver:
                           float_amb_dict: Dict[str, np.ndarray],
                           cov_dict: Dict[str, np.ndarray],
                           elevations: Optional[np.ndarray],
-                          satellite_ids: Optional[List[str]]) -> Tuple[np.ndarray, float, bool, dict]:
+                          satellite_ids: Optional[Union[List[str], Dict[str, List[str]]]]) -> Tuple[np.ndarray, float, bool, dict]:
         """
         Multi-frequency cascaded ambiguity resolution
+        
+        Parameters
+        ----------
+        satellite_ids : List[str] or Dict[str, List[str]]
+            Either a single list for all frequencies, or a dict with frequency-specific lists
+            e.g., {'L1': ['G01', 'G02', ...], 'L2': ['G01', 'G03', ...]}
         """
         info = {
             'method': 'GREAT-PVT-MultiFreq',
@@ -225,7 +232,16 @@ class GreatPVTLambdaResolver:
             'cascaded_resolution': True
         }
         
-        n = len(next(iter(float_amb_dict.values())))
+        # Handle different satellite lists for each frequency
+        if isinstance(satellite_ids, dict):
+            # Different satellites for each frequency
+            sat_ids_per_freq = satellite_ids
+        else:
+            # Same satellites for all frequencies
+            sat_ids_per_freq = {freq: satellite_ids for freq in float_amb_dict.keys()}
+        
+        # Get L1 length as reference (L1 is usually most complete)
+        n = len(float_amb_dict.get('L1', next(iter(float_amb_dict.values()))))
         fixed_ambiguities = np.zeros(n)
         
         # Step 1: Resolve EWL if L2 and L5 are available
@@ -239,30 +255,77 @@ class GreatPVTLambdaResolver:
         
         # Step 2: Resolve WL if L1 and L2 are available
         if 'L1' in float_amb_dict and 'L2' in float_amb_dict:
-            wl_float = self._form_wl(float_amb_dict['L1'], float_amb_dict['L2'])
-            wl_cov = self._combine_covariance(cov_dict.get('L1'), cov_dict.get('L2'))
+            # Find common satellites between L1 and L2
+            sat_ids_l1 = sat_ids_per_freq.get('L1', [])
+            sat_ids_l2 = sat_ids_per_freq.get('L2', [])
             
-            wl_fixed = self._resolve_wl(wl_float, wl_cov, satellite_ids)
-            info['wl_fixed'] = len(wl_fixed)
-            info['wl_success_rate'] = len(wl_fixed) / n if n > 0 else 0
+            # Find common satellites and their indices
+            common_sats = []
+            l1_indices = []
+            l2_indices = []
             
-            # Step 3: Resolve NL using WL constraint
+            print(f"DEBUG: L1 satellites ({len(sat_ids_l1)}): {sat_ids_l1[:5]}...")
+            print(f"DEBUG: L2 satellites ({len(sat_ids_l2)}): {sat_ids_l2[:5]}...")
+            
+            for i, sat in enumerate(sat_ids_l1):
+                if sat in sat_ids_l2:
+                    j = sat_ids_l2.index(sat)
+                    common_sats.append(sat)
+                    l1_indices.append(i)
+                    l2_indices.append(j)
+            
+            print(f"DEBUG: Found {len(common_sats)} common satellites between L1 and L2")
+            
+            if len(common_sats) >= self.min_satellites:
+                # Form WL using only common satellites
+                l1_common = float_amb_dict['L1'][l1_indices]
+                l2_common = float_amb_dict['L2'][l2_indices]
+                wl_float = self._form_wl(l1_common, l2_common)
+                
+                # Extract covariance for common satellites
+                cov_l1 = cov_dict.get('L1', np.eye(len(float_amb_dict['L1'])))
+                cov_l2 = cov_dict.get('L2', np.eye(len(float_amb_dict['L2'])))
+                cov_l1_common = cov_l1[np.ix_(l1_indices, l1_indices)]
+                cov_l2_common = cov_l2[np.ix_(l2_indices, l2_indices)]
+                wl_cov = self._combine_covariance(cov_l1_common, cov_l2_common)
+                
+                wl_fixed = self._resolve_wl(wl_float, wl_cov, common_sats)
+                info['wl_fixed'] = len(wl_fixed)
+                info['wl_success_rate'] = len(wl_fixed) / len(common_sats) if len(common_sats) > 0 else 0
+                info['common_satellites'] = common_sats
+                info['n_common'] = len(common_sats)
+            else:
+                wl_fixed = {}
+                info['wl_fixed'] = 0
+                info['wl_success_rate'] = 0
+                info['common_satellites'] = common_sats
+                info['n_common'] = len(common_sats)
+                print(f"DEBUG: Not enough common satellites for WL: {len(common_sats)} < {self.min_satellites}")
+            
+            # Step 3: Resolve NL using WL constraint (only for common satellites)
             if len(wl_fixed) >= self.min_satellites:
-                nl_float = self._form_nl(float_amb_dict['L1'], float_amb_dict['L2'])
-                nl_cov = self._combine_covariance(cov_dict.get('L1'), cov_dict.get('L2'))
+                # Use only common satellites for NL
+                nl_float = self._form_nl(l1_common, l2_common)
+                nl_cov = self._combine_covariance(cov_l1_common, cov_l2_common)
                 
                 nl_fixed, ratio = self._resolve_nl_with_wl(
-                    nl_float, nl_cov, wl_fixed, satellite_ids
+                    nl_float, nl_cov, wl_fixed, common_sats
                 )
                 
-                # Recover L1 and L2 from WL and NL
+                info['nl_attempt'] = True
+                info['nl_fixed_count'] = len(nl_fixed)
+                
+                # Recover L1 ambiguities for common satellites
                 if len(nl_fixed) >= self.min_satellites:
-                    for i, sat in enumerate(satellite_ids or range(n)):
-                        sat_key = str(sat)
+                    # Return fixed ambiguities for L1 (common satellites)
+                    fixed_l1 = np.full(len(sat_ids_l1), np.nan)
+                    for idx, sat_key in enumerate(common_sats):
                         if sat_key in wl_fixed and sat_key in nl_fixed:
-                            # L1 = NL + WL/2, L2 = NL - WL/2
-                            fixed_ambiguities[i] = nl_fixed[sat_key] + wl_fixed[sat_key] / 2.0
+                            # L1 = NL + WL/2
+                            l1_idx = sat_ids_l1.index(sat_key)
+                            fixed_l1[l1_idx] = nl_fixed[sat_key] + wl_fixed[sat_key] / 2.0
                     
+                    fixed_ambiguities = fixed_l1
                     is_fixed = True
                     info['nl_fixed'] = len(nl_fixed)
                     info['ratio'] = ratio
@@ -270,8 +333,10 @@ class GreatPVTLambdaResolver:
                     is_fixed = False
                     ratio = 0.0
             else:
+                print(f"DEBUG: WL constraint failed, not enough WL fixed")
                 is_fixed = False
                 ratio = 0.0
+                info['wl_constraint_failed'] = True
         else:
             # Fallback to single frequency if only L1 available
             if 'L1' in float_amb_dict:
@@ -302,6 +367,7 @@ class GreatPVTLambdaResolver:
         
         # Use satellite selection if enabled
         if self.use_satellite_selection and self.selection_resolver and satellite_ids is not None:
+            print(f"DEBUG: Using satellite selection resolver with {len(float_ambiguities)} ambiguities")
             return self.selection_resolver.resolve(
                 float_ambiguities, covariance, elevations, satellite_ids)
         
@@ -330,9 +396,15 @@ class GreatPVTLambdaResolver:
         boot_rate = self._compute_bootstrapping_rate(D)
         info['bootstrapping_rate'] = boot_rate
         
+        logger.debug(f"Bootstrapping rate: {boot_rate:.3f}, threshold: {self.bootstrap_threshold}")
+        logger.debug(f"D diagonal: {D[:min(5, len(D))]}")
+        logger.debug(f"Float ambiguities std: {np.std(float_subset):.3f}")
+        
         # Check bootstrapping threshold
         if boot_rate < self.bootstrap_threshold:
-            logger.debug(f"Bootstrapping rate too low: {boot_rate:.3f} < {self.bootstrap_threshold}")
+            logger.info(f"Bootstrapping rate too low: {boot_rate:.3f} < {self.bootstrap_threshold}")
+            logger.info(f"D diagonal values: {D}")
+            logger.info(f"Float ambiguity covariance diagonal: {np.diag(cov_subset)}")
             info['bootstrap_passed'] = False
             # Don't proceed with integer search if bootstrapping fails
             return float_ambiguities, 0.0, False, info
@@ -346,7 +418,7 @@ class GreatPVTLambdaResolver:
         candidates, residuals = self._integer_search(float_decorr, L, D)
         
         if len(candidates) < 2:
-            logger.warning("Not enough candidates for ratio test")
+            logger.info(f"Not enough candidates for ratio test: {len(candidates)} candidates found")
             return float_ambiguities, 0.0, False, info
         
         # Transform back to original space
@@ -396,7 +468,11 @@ class GreatPVTLambdaResolver:
     
     def _form_wl(self, l1_amb: np.ndarray, l2_amb: np.ndarray) -> np.ndarray:
         """Form Wide-Lane combination (L1 - L2)"""
-        return l1_amb - l2_amb
+        wl = l1_amb - l2_amb
+        print(f"DEBUG: Forming WL - L1 amb: {l1_amb[:3]}")
+        print(f"DEBUG: Forming WL - L2 amb: {l2_amb[:3]}")
+        print(f"DEBUG: Forming WL - WL result: {wl[:3]}")
+        return wl
     
     def _form_nl(self, l1_amb: np.ndarray, l2_amb: np.ndarray) -> np.ndarray:
         """Form Narrow-Lane combination ((L1 + L2) / 2)"""
@@ -437,6 +513,8 @@ class GreatPVTLambdaResolver:
         """Resolve WL ambiguities using bdeci validation (GREAT-PVT approach)"""
         fixed = {}
         wl_sigma = np.sqrt(np.diag(wl_cov))
+        print(f"DEBUG: WL resolution - float WL: {wl_float[:5]}...")
+        print(f"DEBUG: WL resolution - sigma: {wl_sigma[:5]}...")
         
         for i, sat in enumerate(satellite_ids or range(len(wl_float))):
             sat_key = str(sat)
@@ -455,9 +533,11 @@ class GreatPVTLambdaResolver:
                 fixed_val = round(adjusted_float)
                 fixed[sat_key] = fixed_val
                 self.fixed_wl[sat_key] = fixed_val
-                logger.debug(f"WL fixed for {sat_key}: {fixed_val} (deci={deci:.2f}, prob={prob:.3f})")
+                if i < 3:  # Print first few
+                    print(f"DEBUG: WL fixed for {sat_key}: {fixed_val} (deci={deci:.2f}, prob={prob:.3f})")
             else:
-                logger.debug(f"WL not fixed for {sat_key}: deci={deci:.2f} < {self.bdeci_alpha}")
+                if i < 3:  # Print first few
+                    print(f"DEBUG: WL not fixed for {sat_key}: deci={deci:.2f} < {self.bdeci_alpha}")
         
         return fixed
     
@@ -549,39 +629,69 @@ class GreatPVTLambdaResolver:
     def _integer_search(self, float_amb: np.ndarray, L: np.ndarray, 
                        D: np.ndarray) -> Tuple[List[np.ndarray], List[float]]:
         """
-        Integer search using GREAT-PVT's simple approach
+        Integer search using proper LAMBDA algorithm
         
         Returns list of integer candidates and their residuals
         """
         n = len(float_amb)
-        candidates = []
-        residuals = []
         
-        # First candidate: simple rounding
-        candidate1 = np.round(float_amb)
-        residual1 = self._compute_residual(candidate1, float_amb, D)
-        candidates.append(candidate1)
-        residuals.append(residual1)
-        
-        # Second candidate: try ±1 perturbations
-        best_alt_residual = float('inf')
-        best_alt_candidate = None
-        
-        for i in range(n):
-            for delta in [-1, 1]:
-                candidate = candidate1.copy()
-                candidate[i] += delta
-                residual = self._compute_residual(candidate, float_amb, D)
-                
-                # Check if this is better than current alternative
-                if residual < best_alt_residual and not np.array_equal(candidate, candidate1):
-                    best_alt_residual = residual
-                    best_alt_candidate = candidate.copy()
-        
-        # Add second best if found
-        if best_alt_candidate is not None:
-            candidates.append(best_alt_candidate)
-            residuals.append(best_alt_residual)
+        # Use the actual LAMBDA search from pyins
+        try:
+            # Search for 2 best candidates for ratio test
+            ncands = 2
+            logger.debug(f"Calling LAMBDA search with {n} ambiguities")
+            afixed, sqnorm = lambda_search(float_amb, L, D, ncands)
+            logger.debug(f"LAMBDA search returned {afixed.shape[1]} candidates")
+            
+            # Convert to list format expected by caller
+            candidates = []
+            residuals = []
+            
+            for i in range(min(ncands, afixed.shape[1])):
+                candidates.append(afixed[:, i])
+                residuals.append(sqnorm[i])
+            
+            # If we didn't get enough candidates, add a simple rounded one
+            if len(candidates) < 2:
+                candidate1 = np.round(float_amb)
+                residual1 = self._compute_residual(candidate1, float_amb, D)
+                if len(candidates) == 0 or not np.array_equal(candidates[0], candidate1):
+                    candidates.append(candidate1)
+                    residuals.append(residual1)
+            
+            return candidates, residuals
+            
+        except Exception as e:
+            logger.warning(f"LAMBDA search failed: {e}, falling back to simple rounding")
+            # Fallback to simple rounding if LAMBDA fails
+            candidates = []
+            residuals = []
+            
+            # First candidate: simple rounding
+            candidate1 = np.round(float_amb)
+            residual1 = self._compute_residual(candidate1, float_amb, D)
+            candidates.append(candidate1)
+            residuals.append(residual1)
+            
+            # Second candidate: try ±1 perturbations
+            best_alt_residual = float('inf')
+            best_alt_candidate = None
+            
+            for i in range(n):
+                for delta in [-1, 1]:
+                    candidate = candidate1.copy()
+                    candidate[i] += delta
+                    residual = self._compute_residual(candidate, float_amb, D)
+                    
+                    # Check if this is better than current alternative
+                    if residual < best_alt_residual and not np.array_equal(candidate, candidate1):
+                        best_alt_residual = residual
+                        best_alt_candidate = candidate.copy()
+            
+            # Add second best if found
+            if best_alt_candidate is not None:
+                candidates.append(best_alt_candidate)
+                residuals.append(best_alt_residual)
         
         # Sort by residual
         if len(candidates) >= 2:

@@ -248,6 +248,7 @@ class GreatPVTWithSelection:
         info : dict
             Additional information about the resolution
         """
+        print(f"DEBUG: GreatPVTWithSelection.resolve called with {len(float_ambiguities)} ambiguities")
         self.total_epochs += 1
         n_total = len(float_ambiguities)
         
@@ -311,6 +312,11 @@ class GreatPVTWithSelection:
             
             # Integer search (get top 2 candidates for ratio test)
             candidates, scores = lambda_search(z_hat, L, D, ncands=2)
+            print(f"DEBUG: LAMBDA search returned {len(candidates)} candidates for {len(z_hat)} ambiguities")
+            if len(candidates) > 0:
+                print(f"DEBUG: Best score: {scores[0]}")
+            if len(candidates) > 1:
+                print(f"DEBUG: Second score: {scores[1]}")
             
             if len(candidates) >= 2:
                 # Transform back to original space
@@ -329,11 +335,12 @@ class GreatPVTWithSelection:
                 ratio = float('inf')  # No second candidate for ratio
             else:
                 # No candidates found, fall back to rounding
+                print(f"DEBUG: No LAMBDA candidates found for subset of {len(float_amb_subset)} ambiguities")
                 z_fixed = np.round(float_amb_subset).astype(int)
                 ratio = 0.0
                 
         except Exception as e:
-            logger.debug(f"LAMBDA search failed: {e}, falling back to rounding")
+            logger.info(f"LAMBDA search failed: {e}, falling back to rounding")
             # Fall back to simple rounding if LAMBDA fails
             z_fixed = np.round(float_amb_subset).astype(int)
             

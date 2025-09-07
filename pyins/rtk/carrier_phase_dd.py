@@ -20,9 +20,21 @@ import numpy as np
 from ..core.constants import (
     CLIGHT,
     FREQ_B1I,
+    FREQ_B2a,
+    FREQ_B3,
     FREQ_E1,
+    FREQ_E5a,
+    FREQ_E5b,
+    FREQ_G1,
+    FREQ_G2,
+    DFREQ_G1,
+    DFREQ_G2,
     FREQ_J1,
+    FREQ_J2,
+    FREQ_J5,
     FREQ_L1,
+    FREQ_L2,
+    FREQ_L5,
     SYS_BDS,
     SYS_GAL,
     SYS_GLO,
@@ -41,6 +53,7 @@ class CarrierPhaseDD:
         self.ambiguities = {}  # Store ambiguities for each satellite pair
         self.fixed_ambiguities = {}  # Fixed integer ambiguities
         self.cycle_slips = {}  # Track cycle slips
+        self.initial_dd = {}  # Store initial DD values for relative calculation
 
     def get_wavelength(self, sat_id: int, freq_idx: int = 0) -> float:
         """Get carrier wavelength for satellite and frequency
@@ -58,15 +71,6 @@ class CarrierPhaseDD:
             Carrier wavelength in meters
         """
         sys_id = sat2sys(sat_id)
-
-        # Import additional frequency constants
-        from ..core.constants import (
-            FREQ_L2, FREQ_L5,
-            FREQ_E5a, FREQ_E5b,
-            FREQ_B2a, FREQ_B3,
-            FREQ_J2, FREQ_J5,
-            FREQ_G1, DFREQ_G1, FREQ_G2, DFREQ_G2
-        )
 
         if sys_id == SYS_GPS:
             freqs = [FREQ_L1, FREQ_L2, FREQ_L5]
@@ -182,13 +186,28 @@ class CarrierPhaseDD:
                     wavelength = self.get_wavelength(other_sat, freq_idx)
                     ref_wavelength = self.get_wavelength(ref_sat, freq_idx)
 
-                    # Carrier phase DD in meters
-                    sd_ref_meters = rov_ref.L[freq_idx] * ref_wavelength - base_ref.L[freq_idx] * ref_wavelength
-                    sd_other_meters = rov_other.L[freq_idx] * wavelength - base_other.L[freq_idx] * wavelength
-                    dd_meters = sd_other_meters - sd_ref_meters
-
-                    # Convert to cycles
-                    dd_cycles = dd_meters / wavelength
+                    # Carrier phase DD calculation (RTKLIB style)
+                    # Assume values are now in cycles after RINEX reader fix
+                    rov_ref_cycles = rov_ref.L[freq_idx]
+                    rov_other_cycles = rov_other.L[freq_idx]
+                    base_ref_cycles = base_ref.L[freq_idx]
+                    base_other_cycles = base_other.L[freq_idx]
+                    
+                    # Form single differences in cycles
+                    sd_ref_cycles = rov_ref_cycles - base_ref_cycles
+                    sd_other_cycles = rov_other_cycles - base_other_cycles
+                    
+                    # Form double difference in cycles
+                    dd_cycles = sd_other_cycles - sd_ref_cycles
+                    
+                    # Convert to meters for consistency
+                    dd_meters = dd_cycles * wavelength
+                    
+                    # Debug values for both L1 and L2
+                    if len(all_dd_phase_cycles) < 2:
+                        print(f"DEBUG L{freq_idx+1} DD: sat pair {ref_sat}-{other_sat}")
+                        print(f"  SD cycles: ref={sd_ref_cycles:.3f}, other={sd_other_cycles:.3f}")
+                        print(f"  DD cycles={dd_cycles:.3f}, DD meters={dd_meters:.3f}")
 
                     # Pseudorange DD in meters
                     if (freq_idx < len(rov_ref.P) and freq_idx < len(rov_other.P) and

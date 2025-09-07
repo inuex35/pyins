@@ -179,7 +179,10 @@ def single_point_positioning(observations, nav_data, initial_pos=None,
         x = np.zeros(7)
     else:
         x = np.zeros(7)
-        x[:3] = initial_pos.copy()
+        if isinstance(initial_pos, np.ndarray):
+            x[:3] = initial_pos.copy()
+        else:
+            x[:3] = initial_pos  # Handle scalar or list
 
     # Iterative least squares
     for iteration in range(MAXITR):
