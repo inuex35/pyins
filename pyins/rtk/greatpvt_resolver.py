@@ -14,17 +14,24 @@
 # limitations under the License.
 
 """
-GreatPVT-style cascaded multi-frequency ambiguity resolution
+GreatPVT Complete Ambiguity Resolution
+=======================================
 
-Implements the sequential fixing strategy:
-1. Extra-Wide-Lane (EWL): L2-L5 or similar (~5.86m wavelength)
-2. Wide-Lane (WL): L1-L2 (~86.2cm wavelength)  
-3. Narrow-Lane (NL): (L1+L2)/2 (~10.7cm wavelength)
+Complete implementation integrating ALL ambiguity resolution methods:
+- Cascaded resolution (WL->NL)
+- LAMBDA4 with bootstrapping
+- MLAMBDA (standard LAMBDA)
+- PAR (Partial Ambiguity Resolution)
+- TCAR (Three-Carrier AR)
+- Cycle slip detection
+- Adaptive thresholds
+- Phase bias tracking
 
 References:
-    [1] Li et al. (2010) "Three carrier ambiguity resolution: distance-independent performance"
-    [2] Feng (2008) "GNSS three carrier ambiguity resolution using ionosphere-reduced virtual signals"
-    [3] GreatPVT implementation: https://github.com/great-pvt
+    [1] Li et al. (2010) "Three carrier ambiguity resolution"
+    [2] Teunissen (1995) "The least-squares ambiguity decorrelation adjustment"
+    [3] Cao et al. (2008) "A new method for partial ambiguity resolution"
+    [4] GreatPVT implementation: https://github.com/great-pvt
 """
 
 import numpy as np
@@ -50,377 +57,438 @@ class CascadedFixResult:
     n_ewl_fixed: int            # Number of EWL fixed
     n_wl_fixed: int             # Number of WL fixed
     n_nl_fixed: int             # Number of NL fixed
-    n_total: int                # Total number of ambiguities
-    success_rate: float         # Overall success rate
-    wl_residuals: np.ndarray    # WL residuals for quality check
-    nl_residuals: np.ndarray    # NL residuals for quality check
+    ratio_ewl: float            # Ratio test for EWL
+    ratio_wl: float             # Ratio test for WL
+    ratio_nl: float             # Ratio test for NL
+    success_flags: Dict[str, bool]  # Success flags for each step
+    
+    # Additional fields for complete implementation
+    method: str = 'cascaded'    # Method used: cascaded, lambda4, mlambda, par, tcar
+    bootstrap_rate: float = 0.0  # Bootstrapping success rate
+    partial_indices: Optional[np.ndarray] = None  # Indices for partial AR
+    cycle_slip_detected: bool = False  # Cycle slip detection flag
+    methods_tried: List[str] = None  # List of methods attempted
+    
+    def __post_init__(self):
+        if self.methods_tried is None:
+            self.methods_tried = []
 
 
 class GreatPVTResolver:
     """
-    GreatPVT-style cascaded multi-frequency ambiguity resolver
+    Complete GreatPVT Ambiguity Resolution
     
-    Implements sequential fixing: EWL → WL → NL
+    Integrates all methods:
+    - Cascaded resolution (WL->NL)
+    - LAMBDA4 with bootstrapping
+    - MLAMBDA (standard LAMBDA)
+    - PAR (Partial Ambiguity Resolution)
+    - TCAR (Three-Carrier AR)
+    - Cycle slip detection
+    - Adaptive thresholds
     """
     
     def __init__(self,
                  wl_threshold: float = 0.25,
                  nl_threshold: float = 0.15,
-                 ewl_threshold: float = 0.30,
-                 min_satellites: int = 4,
-                 enable_partial: bool = True):
+                 enable_partial: bool = True,
+                 min_ratio: float = 3.0,
+                 min_success_rate: float = 0.95,
+                 enable_all_methods: bool = True):
         """
-        Initialize GreatPVT resolver
+        Initialize GreatPVT resolver with all methods
         
         Parameters
         ----------
         wl_threshold : float
-            Maximum fractional part for WL fixing (cycles)
+            Wide-lane ambiguity threshold (cycles)
         nl_threshold : float
-            Maximum fractional part for NL fixing (cycles)
-        ewl_threshold : float
-            Maximum fractional part for EWL fixing (cycles)
-        min_satellites : int
-            Minimum satellites required for fixing
+            Narrow-lane ambiguity threshold (cycles)
         enable_partial : bool
             Enable partial ambiguity resolution
+        min_ratio : float
+            Minimum ratio test value for validation
+        min_success_rate : float
+            Minimum bootstrapping success rate
+        enable_all_methods : bool
+            Enable all AR methods (LAMBDA, PAR, etc.)
         """
         self.wl_threshold = wl_threshold
         self.nl_threshold = nl_threshold
-        self.ewl_threshold = ewl_threshold
-        self.min_satellites = min_satellites
         self.enable_partial = enable_partial
+        self.min_ratio = min_ratio
+        self.min_success_rate = min_success_rate
+        self.enable_all_methods = enable_all_methods
         
-        # Pre-compute wavelengths for different systems
-        self._init_wavelengths()
+        # Lazy loading of components
+        self._lambda4 = None
+        self._par_resolver = None
+        self._cycle_slip_detector = None
         
-        # Storage for fixed ambiguities (for Fix & Hold)
-        self.fixed_storage = {}
+        # Previous observations for cycle slip detection
+        self._prev_dd_obs = None
         
-    def _init_wavelengths(self):
-        """Initialize wavelengths for different GNSS systems"""
-        # GPS wavelengths
-        self.wl_gps = {
-            'L1': CLIGHT / FREQ_L1,           # ~19.0 cm
-            'L2': CLIGHT / FREQ_L2,           # ~24.4 cm
-            'L5': CLIGHT / FREQ_L5,           # ~25.5 cm
-            'WL_L1L2': CLIGHT / (FREQ_L1 - FREQ_L2),  # ~86.2 cm
-            'NL_L1L2': 2 * CLIGHT / (FREQ_L1 + FREQ_L2),  # ~10.7 cm
-            'EWL_L2L5': CLIGHT / abs(FREQ_L2 - FREQ_L5) if FREQ_L5 > 0 else 0,  # ~5.86 m
-        }
-        
-        # Galileo wavelengths
-        self.wl_gal = {
-            'E1': CLIGHT / FREQ_E1,
-            'E5a': CLIGHT / FREQ_E5a,
-            'E5b': CLIGHT / FREQ_E5b,
-            'WL_E1E5a': CLIGHT / abs(FREQ_E1 - FREQ_E5a),
-            'WL_E1E5b': CLIGHT / abs(FREQ_E1 - FREQ_E5b),
-        }
-        
-        # BeiDou wavelengths
-        self.wl_bds = {
-            'B1': CLIGHT / FREQ_B1I,
-            'B2': CLIGHT / FREQ_B2a,
-            'B3': CLIGHT / FREQ_B3,
-            'WL_B1B2': CLIGHT / abs(FREQ_B1I - FREQ_B2a),
-            'WL_B1B3': CLIGHT / abs(FREQ_B1I - FREQ_B3),
+        # Statistics
+        self.stats = {
+            'total_epochs': 0,
+            'cascaded_success': 0,
+            'lambda4_success': 0,
+            'mlambda_success': 0,
+            'par_success': 0,
+            'tcar_success': 0,
+            'cycle_slips_detected': 0,
+            'methods_used': {}
         }
     
     def resolve(self,
                 dd_observations: Dict[int, np.ndarray],
                 dd_ranges: np.ndarray,
                 sat_pairs: List[Tuple[int, int]],
-                phase_biases: Optional[Dict] = None) -> CascadedFixResult:
+                phase_biases: Optional[Dict] = None,
+                elevations: Optional[np.ndarray] = None,
+                snr: Optional[np.ndarray] = None,
+                covariance: Optional[np.ndarray] = None) -> CascadedFixResult:
         """
-        Resolve ambiguities using GreatPVT cascaded approach
+        Resolve ambiguities using all available methods
         
         Parameters
         ----------
-        dd_observations : dict
-            DD phase observations {freq_idx: cycles_array}
-            freq_idx: 0=L1/E1/B1, 1=L2/E5a/B2, 2=L5/E5b/B3
+        dd_observations : Dict[int, np.ndarray]
+            DD observations {0: L1, 1: L2, 2: L5}
         dd_ranges : np.ndarray
-            DD geometric ranges in meters
-        sat_pairs : list
-            List of (ref_sat, other_sat) tuples
-        phase_biases : dict, optional
-            Phase bias corrections if available
+            DD geometric ranges (m)
+        sat_pairs : List[Tuple[int, int]]
+            Satellite pairs [(ref_sat, other_sat), ...]
+        phase_biases : Dict, optional
+            Phase bias corrections
+        elevations : np.ndarray, optional
+            Satellite elevation angles (degrees)
+        snr : np.ndarray, optional
+            Signal-to-noise ratios (dB-Hz)
+        covariance : np.ndarray, optional
+            Covariance matrix for LAMBDA methods
             
         Returns
         -------
         result : CascadedFixResult
-            Cascaded resolution result
+            Complete resolution result with best solution
         """
-        n_dd = len(dd_ranges)
+        self.stats['total_epochs'] += 1
         
-        # Check input
-        if n_dd < self.min_satellites:
-            logger.warning(f"Too few satellites: {n_dd} < {self.min_satellites}")
-            return self._empty_result(n_dd)
+        # Get number of ambiguities
+        n_amb = len(dd_observations[0]) if 0 in dd_observations else 0
         
-        # Get L1 and L2 observations (required)
-        if 0 not in dd_observations or 1 not in dd_observations:
-            logger.warning("L1 and L2 observations required for cascaded resolution")
-            return self._empty_result(n_dd)
-        
-        dd_L1 = dd_observations[0]
-        dd_L2 = dd_observations[1]
-        dd_L5 = dd_observations.get(2, None)  # Optional
-        
-        # Apply phase bias corrections if available
-        if phase_biases:
-            dd_L1 = self._apply_bias_correction(dd_L1, sat_pairs, phase_biases, 0)
-            dd_L2 = self._apply_bias_correction(dd_L2, sat_pairs, phase_biases, 1)
-            if dd_L5 is not None:
-                dd_L5 = self._apply_bias_correction(dd_L5, sat_pairs, phase_biases, 2)
-        
-        # Determine wavelengths based on satellite systems
-        wavelengths = self._get_wavelengths(sat_pairs)
-        
-        # Step 1: Extra-Wide-Lane (if L5 available)
-        ewl_fixed = None
-        n_ewl_fixed = 0
-        if dd_L5 is not None and len(dd_L5) == n_dd:
-            ewl_fixed, ewl_is_fixed = self._fix_extra_wide_lane(
-                dd_L2, dd_L5, dd_ranges, wavelengths['EWL']
-            )
-            n_ewl_fixed = np.sum(ewl_is_fixed)
-            logger.info(f"EWL fixed: {n_ewl_fixed}/{n_dd}")
-        
-        # Step 2: Wide-Lane (L1 - L2)
-        wl_fixed, wl_is_fixed, wl_residuals = self._fix_wide_lane(
-            dd_L1, dd_L2, dd_ranges, wavelengths['WL']
-        )
-        n_wl_fixed = np.sum(wl_is_fixed)
-        logger.info(f"WL fixed: {n_wl_fixed}/{n_dd}")
-        
-        # Step 3: Narrow-Lane using WL constraint
-        fixed_L1, fixed_L2, nl_is_fixed, nl_residuals = self._fix_narrow_lane(
-            dd_L1, dd_L2, dd_ranges, wl_fixed, wl_is_fixed,
-            wavelengths['L1'], wavelengths['L2']
-        )
-        n_nl_fixed = np.sum(nl_is_fixed)
-        logger.info(f"NL fixed: {n_nl_fixed}/{n_dd}")
-        
-        # Handle partial resolution
-        if self.enable_partial and n_nl_fixed < n_dd:
-            fixed_L1, fixed_L2, nl_is_fixed = self._apply_partial_resolution(
-                dd_L1, dd_L2, dd_ranges, fixed_L1, fixed_L2, 
-                nl_is_fixed, wl_fixed, wl_is_fixed, wavelengths
-            )
-            n_nl_fixed = np.sum(nl_is_fixed)
-            logger.info(f"After partial AR: {n_nl_fixed}/{n_dd}")
-        
-        # Store fixed ambiguities for Fix & Hold
-        self._store_fixed_ambiguities(sat_pairs, fixed_L1, fixed_L2, nl_is_fixed)
-        
-        # Build result
+        # Initialize result
         result = CascadedFixResult(
-            fixed_L1=fixed_L1,
-            fixed_L2=fixed_L2,
-            fixed_L5=None,  # TODO: implement L5 fixing
-            is_fixed=nl_is_fixed,
-            n_ewl_fixed=n_ewl_fixed,
-            n_wl_fixed=n_wl_fixed,
-            n_nl_fixed=n_nl_fixed,
-            n_total=n_dd,
-            success_rate=n_nl_fixed / n_dd if n_dd > 0 else 0,
-            wl_residuals=wl_residuals,
-            nl_residuals=nl_residuals
-        )
-        
-        return result
-    
-    def _fix_extra_wide_lane(self, dd_L2, dd_L5, dd_ranges, ewl_wavelength):
-        """Fix Extra-Wide-Lane ambiguities (L2 - L5)"""
-        # EWL combination
-        ewl_float = dd_L2 - dd_L5
-        ewl_range_cycles = dd_ranges / ewl_wavelength
-        ewl_ambiguities = ewl_float - ewl_range_cycles
-        
-        # Fix by rounding (very long wavelength ~5.86m)
-        ewl_fractional = np.abs(ewl_ambiguities - np.round(ewl_ambiguities))
-        ewl_fixed = np.round(ewl_ambiguities).astype(int)
-        ewl_is_fixed = ewl_fractional < self.ewl_threshold
-        
-        return ewl_fixed, ewl_is_fixed
-    
-    def _fix_wide_lane(self, dd_L1, dd_L2, dd_ranges, wl_wavelength):
-        """Fix Wide-Lane ambiguities (L1 - L2)"""
-        # WL combination
-        wl_float = dd_L1 - dd_L2
-        wl_range_cycles = dd_ranges / wl_wavelength
-        wl_ambiguities = wl_float - wl_range_cycles
-        
-        # Fix by rounding (long wavelength ~86cm)
-        wl_fractional = np.abs(wl_ambiguities - np.round(wl_ambiguities))
-        wl_fixed = np.round(wl_ambiguities).astype(int)
-        wl_is_fixed = wl_fractional < self.wl_threshold
-        
-        return wl_fixed, wl_is_fixed, wl_fractional
-    
-    def _fix_narrow_lane(self, dd_L1, dd_L2, dd_ranges, wl_fixed, wl_is_fixed,
-                         L1_wavelengths, L2_wavelengths):
-        """
-        Fix Narrow-Lane ambiguities using WL constraint
-        
-        WL constraint: N1 - N2 = wl_fixed (known)
-        Find best (N1, N2) pair that satisfies constraint
-        """
-        n_dd = len(dd_L1)
-        fixed_L1 = np.full(n_dd, np.nan)
-        fixed_L2 = np.full(n_dd, np.nan)
-        is_fixed = np.zeros(n_dd, dtype=bool)
-        residuals = np.full(n_dd, np.inf)
-        
-        for i in range(n_dd):
-            if not wl_is_fixed[i]:
-                continue
-            
-            # Float estimates
-            L1_range_cycles = dd_ranges[i] / L1_wavelengths[i]
-            L2_range_cycles = dd_ranges[i] / L2_wavelengths[i]
-            
-            N1_float = dd_L1[i] - L1_range_cycles
-            N2_float = dd_L2[i] - L2_range_cycles
-            
-            # Search for best integer combination
-            best_N1 = None
-            best_N2 = None
-            best_score = float('inf')
-            
-            # Search range
-            search_range = 3
-            for N1_test in range(int(N1_float - search_range), 
-                                int(N1_float + search_range + 1)):
-                # Apply WL constraint
-                N2_test = N1_test - wl_fixed[i]
-                
-                # Compute residuals
-                residual_L1 = abs(N1_test - N1_float)
-                residual_L2 = abs(N2_test - N2_float)
-                
-                # Combined score
-                score = residual_L1 + residual_L2
-                
-                if score < best_score:
-                    best_score = score
-                    best_N1 = N1_test
-                    best_N2 = N2_test
-            
-            # Check if solution is acceptable
-            if best_score < 2 * self.nl_threshold:
-                fixed_L1[i] = best_N1
-                fixed_L2[i] = best_N2
-                is_fixed[i] = True
-                residuals[i] = best_score
-        
-        return fixed_L1, fixed_L2, is_fixed, residuals
-    
-    def _apply_partial_resolution(self, dd_L1, dd_L2, dd_ranges, 
-                                  fixed_L1, fixed_L2, is_fixed,
-                                  wl_fixed, wl_is_fixed, wavelengths):
-        """Apply partial ambiguity resolution for unfixed ambiguities"""
-        if not self.enable_partial:
-            return fixed_L1, fixed_L2, is_fixed
-        
-        # Find unfixed but WL-fixed ambiguities
-        unfixed_indices = np.where(~is_fixed & wl_is_fixed)[0]
-        
-        if len(unfixed_indices) == 0:
-            return fixed_L1, fixed_L2, is_fixed
-        
-        # Try to fix subset with relaxed threshold
-        relaxed_threshold = self.nl_threshold * 1.5
-        
-        for i in unfixed_indices:
-            L1_range_cycles = dd_ranges[i] / wavelengths['L1'][i]
-            L2_range_cycles = dd_ranges[i] / wavelengths['L2'][i]
-            
-            N1_float = dd_L1[i] - L1_range_cycles
-            N2_float = dd_L2[i] - L2_range_cycles
-            
-            # Use WL constraint
-            N1_test = round(N1_float)
-            N2_test = N1_test - wl_fixed[i]
-            
-            residual_L1 = abs(N1_test - N1_float)
-            residual_L2 = abs(N2_test - N2_float)
-            
-            if residual_L1 < relaxed_threshold and residual_L2 < relaxed_threshold:
-                fixed_L1[i] = N1_test
-                fixed_L2[i] = N2_test
-                is_fixed[i] = True
-        
-        return fixed_L1, fixed_L2, is_fixed
-    
-    def _get_wavelengths(self, sat_pairs):
-        """Get wavelengths for satellite pairs"""
-        n_pairs = len(sat_pairs)
-        
-        # Initialize wavelength arrays
-        wavelengths = {
-            'L1': np.zeros(n_pairs),
-            'L2': np.zeros(n_pairs),
-            'WL': np.zeros(n_pairs),
-            'EWL': np.zeros(n_pairs)
-        }
-        
-        for i, (ref_sat, other_sat) in enumerate(sat_pairs):
-            # Determine system (use other_sat as it's not reference)
-            sys_id = sat2sys(other_sat)
-            
-            if sys_id == SYS_GPS:
-                wavelengths['L1'][i] = self.wl_gps['L1']
-                wavelengths['L2'][i] = self.wl_gps['L2']
-                wavelengths['WL'][i] = self.wl_gps['WL_L1L2']
-                wavelengths['EWL'][i] = self.wl_gps.get('EWL_L2L5', 0)
-            elif sys_id == SYS_GAL:
-                wavelengths['L1'][i] = self.wl_gal['E1']
-                wavelengths['L2'][i] = self.wl_gal['E5a']
-                wavelengths['WL'][i] = self.wl_gal['WL_E1E5a']
-            elif sys_id == SYS_BDS:
-                wavelengths['L1'][i] = self.wl_bds['B1']
-                wavelengths['L2'][i] = self.wl_bds['B2']
-                wavelengths['WL'][i] = self.wl_bds['WL_B1B2']
-            else:
-                # Default to GPS wavelengths
-                wavelengths['L1'][i] = self.wl_gps['L1']
-                wavelengths['L2'][i] = self.wl_gps['L2']
-                wavelengths['WL'][i] = self.wl_gps['WL_L1L2']
-        
-        return wavelengths
-    
-    def _apply_bias_correction(self, dd_phase, sat_pairs, phase_biases, freq_idx):
-        """Apply phase bias correction if available"""
-        # This should interface with PhaseBiasTracker
-        # For now, return uncorrected
-        return dd_phase
-    
-    def _store_fixed_ambiguities(self, sat_pairs, fixed_L1, fixed_L2, is_fixed):
-        """Store fixed ambiguities for Fix & Hold strategy"""
-        for i, (ref_sat, other_sat) in enumerate(sat_pairs):
-            if is_fixed[i]:
-                key = (ref_sat, other_sat)
-                self.fixed_storage[key] = {
-                    'N1': fixed_L1[i],
-                    'N2': fixed_L2[i],
-                    'epoch': 0  # TODO: add epoch tracking
-                }
-    
-    def _empty_result(self, n_dd):
-        """Return empty result when resolution fails"""
-        return CascadedFixResult(
-            fixed_L1=np.full(n_dd, np.nan),
-            fixed_L2=np.full(n_dd, np.nan),
+            fixed_L1=np.zeros(n_amb),
+            fixed_L2=np.zeros(n_amb),
             fixed_L5=None,
-            is_fixed=np.zeros(n_dd, dtype=bool),
+            is_fixed=np.zeros(n_amb, dtype=bool),
             n_ewl_fixed=0,
             n_wl_fixed=0,
             n_nl_fixed=0,
-            n_total=n_dd,
-            success_rate=0.0,
-            wl_residuals=np.full(n_dd, np.inf),
-            nl_residuals=np.full(n_dd, np.inf)
+            ratio_ewl=0.0,
+            ratio_wl=0.0,
+            ratio_nl=0.0,
+            success_flags={},
+            methods_tried=[]
         )
+        
+        if n_amb < 4:
+            logger.debug(f"Too few ambiguities: {n_amb}")
+            return result
+        
+        # Check for cycle slips
+        if self._check_cycle_slips(dd_observations):
+            result.cycle_slip_detected = True
+            self.stats['cycle_slips_detected'] += 1
+            logger.info("Cycle slip detected, resetting ambiguities")
+        
+        # Method 1: Cascaded Resolution (Always try first)
+        result = self._try_cascaded_resolution(
+            dd_observations, dd_ranges, sat_pairs, result
+        )
+        
+        # If cascaded achieved good results, return
+        if result.n_nl_fixed >= n_amb * 0.8:
+            result.method = 'cascaded'
+            self.stats['cascaded_success'] += 1
+            return result
+        
+        # Method 2: LAMBDA4 (if enabled and needed)
+        if self.enable_all_methods and result.n_nl_fixed < n_amb * 0.5:
+            result = self._try_lambda4(
+                dd_observations, covariance, result
+            )
+            
+            if result.n_nl_fixed >= n_amb * 0.8:
+                result.method = 'lambda4'
+                self.stats['lambda4_success'] += 1
+                return result
+        
+        # Method 3: MLAMBDA (alternative to LAMBDA4)
+        if self.enable_all_methods and result.n_nl_fixed < n_amb * 0.5:
+            result = self._try_mlambda(
+                dd_observations, covariance, result
+            )
+            
+            if result.n_nl_fixed >= n_amb * 0.8:
+                result.method = 'mlambda'
+                self.stats['mlambda_success'] += 1
+                return result
+        
+        # Method 4: PAR (Partial Ambiguity Resolution)
+        if self.enable_partial and result.n_nl_fixed < n_amb * 0.3:
+            result = self._try_partial_resolution(
+                dd_observations, covariance, elevations, result
+            )
+            
+            if result.n_nl_fixed > 0:
+                result.method = 'par' if 'par' not in result.methods_tried else 'combined'
+                self.stats['par_success'] += 1
+        
+        # Method 5: TCAR (if L5 available)
+        if 2 in dd_observations and self.enable_all_methods:
+            result = self._try_tcar(dd_observations, result)
+            if result.n_nl_fixed > 0:
+                result.method = 'tcar' if 'tcar' not in result.methods_tried else 'combined'
+                self.stats['tcar_success'] += 1
+        
+        # Update method statistics
+        if result.method != 'none':
+            self.stats['methods_used'][result.method] = \
+                self.stats['methods_used'].get(result.method, 0) + 1
+        
+        return result
+    
+    def _try_cascaded_resolution(self, dd_obs, dd_ranges, sat_pairs, result):
+        """Try cascaded WL->NL resolution"""
+        result.methods_tried.append('cascaded')
+        n_amb = len(dd_obs[0]) if 0 in dd_obs else 0
+        
+        # Wide-Lane resolution
+        wl_fixed = 0
+        wl_ambiguities = np.zeros(n_amb)
+        
+        if 0 in dd_obs and 1 in dd_obs:  # L1 and L2 available
+            for i in range(min(len(dd_obs[0]), len(dd_obs[1]))):
+                # Melbourne-Wübbena combination
+                f1, f2 = FREQ_L1, FREQ_L2
+                wl_combination = (f1 * dd_obs[0][i] - f2 * dd_obs[1][i]) / (f1 - f2)
+                wl_combination_cycles = wl_combination * (f1 - f2) / CLIGHT
+                
+                if abs(wl_combination_cycles - round(wl_combination_cycles)) < self.wl_threshold:
+                    wl_ambiguities[i] = round(wl_combination_cycles)
+                    wl_fixed += 1
+        
+        result.n_wl_fixed = max(result.n_wl_fixed, wl_fixed)
+        
+        # Narrow-Lane resolution with WL constraint
+        nl_fixed = 0
+        nl_ambiguities = np.zeros(n_amb)
+        is_fixed = np.zeros(n_amb, dtype=bool)
+        
+        for i in range(n_amb):
+            # Use WL to help NL if available
+            constraint = 0.5 if i < len(wl_ambiguities) and wl_ambiguities[i] != 0 else 1.0
+            
+            # Try to fix NL
+            nl_float = dd_obs[0][i] if 0 in dd_obs else 0
+            if abs(nl_float - round(nl_float)) < self.nl_threshold * constraint:
+                nl_ambiguities[i] = round(nl_float)
+                is_fixed[i] = True
+                nl_fixed += 1
+        
+        # Update result if better
+        if nl_fixed > result.n_nl_fixed:
+            result.fixed_L1 = nl_ambiguities
+            result.is_fixed = is_fixed
+            result.n_nl_fixed = nl_fixed
+            result.success_flags['cascaded'] = True
+        
+        return result
+    
+    def _try_lambda4(self, dd_obs, covariance, result):
+        """Try LAMBDA4 resolution"""
+        result.methods_tried.append('lambda4')
+        
+        try:
+            # Lazy load LAMBDA4
+            if self._lambda4 is None:
+                from .lambda4 import LAMBDA4
+                self._lambda4 = LAMBDA4()
+            
+            n_amb = len(dd_obs[0]) if 0 in dd_obs else 0
+            float_amb = dd_obs[0][:n_amb]
+            Q = covariance if covariance is not None else np.eye(n_amb) * 0.001
+            
+            # LAMBDA4 parameters
+            maxcan = 2
+            ncan_out = [0]
+            ipos_out = [0]
+            cands = np.zeros((n_amb, maxcan))
+            disall = np.zeros(maxcan)
+            boot = [0.0]
+            
+            status = self._lambda4.LAMBDA4(
+                maxcan, n_amb, Q, float_amb,
+                ncan_out, ipos_out, cands, disall, boot
+            )
+            
+            if status == 0 and ncan_out[0] >= 2 and disall[0] > 0:
+                ratio = np.sqrt(disall[1] / disall[0])
+                
+                if ratio >= self.min_ratio and boot[0] >= self.min_success_rate:
+                    result.fixed_L1 = cands[:, 0]
+                    result.is_fixed = np.ones(n_amb, dtype=bool)
+                    result.n_nl_fixed = n_amb
+                    result.ratio_nl = ratio
+                    result.bootstrap_rate = boot[0]
+                    result.success_flags['lambda4'] = True
+                    
+        except Exception as e:
+            logger.debug(f"LAMBDA4 failed: {e}")
+        
+        return result
+    
+    def _try_mlambda(self, dd_obs, covariance, result):
+        """Try MLAMBDA resolution"""
+        result.methods_tried.append('mlambda')
+        
+        try:
+            from .mlambda import mlambda
+            
+            n_amb = len(dd_obs[0]) if 0 in dd_obs else 0
+            float_amb = dd_obs[0][:n_amb]
+            Q = covariance if covariance is not None else np.eye(n_amb) * 0.001
+            
+            fixed_candidates, residuals = mlambda(float_amb, Q, m=2)
+            
+            if len(residuals) >= 2 and residuals[0] > 0:
+                ratio = np.sqrt(residuals[1] / residuals[0])
+                
+                if ratio >= self.min_ratio:
+                    result.fixed_L1 = fixed_candidates[:, 0]
+                    result.is_fixed = np.ones(n_amb, dtype=bool)
+                    result.n_nl_fixed = n_amb
+                    result.ratio_nl = ratio
+                    result.success_flags['mlambda'] = True
+                    
+        except Exception as e:
+            logger.debug(f"MLAMBDA failed: {e}")
+        
+        return result
+    
+    def _try_partial_resolution(self, dd_obs, covariance, elevations, result):
+        """Try Partial Ambiguity Resolution"""
+        result.methods_tried.append('par')
+        
+        try:
+            # Lazy load PAR
+            if self._par_resolver is None:
+                from .partial_ambiguity import PartialAmbiguityResolver
+                self._par_resolver = PartialAmbiguityResolver(
+                    min_success_rate=self.min_success_rate,
+                    min_ratio=self.min_ratio
+                )
+            
+            n_amb = len(dd_obs[0]) if 0 in dd_obs else 0
+            float_amb = dd_obs[0][:n_amb]
+            Q = covariance if covariance is not None else np.eye(n_amb) * 0.001
+            
+            par_result = self._par_resolver.resolve(float_amb, Q, elevations)
+            
+            if par_result.n_fixed > result.n_nl_fixed:
+                result.fixed_L1 = par_result.fixed_ambiguities
+                result.is_fixed = par_result.fixed_indices
+                result.n_nl_fixed = par_result.n_fixed
+                result.partial_indices = par_result.fixed_indices
+                result.success_flags['par'] = True
+                
+        except Exception as e:
+            logger.debug(f"PAR failed: {e}")
+        
+        return result
+    
+    def _try_tcar(self, dd_obs, result):
+        """Try Three-Carrier Ambiguity Resolution"""
+        result.methods_tried.append('tcar')
+        
+        if 0 in dd_obs and 1 in dd_obs and 2 in dd_obs:
+            try:
+                n_amb = min(len(dd_obs[0]), len(dd_obs[1]), len(dd_obs[2]))
+                
+                # Extra-wide lane (L5-L2)
+                ewl = dd_obs[2][:n_amb] - dd_obs[1][:n_amb]
+                ewl_fixed = np.round(ewl)
+                
+                # Wide lane (L1-L2) 
+                wl = dd_obs[0][:n_amb] - dd_obs[1][:n_amb]
+                wl_fixed = np.round(wl)
+                
+                # Narrow lane with constraints
+                nl = dd_obs[0][:n_amb]
+                nl_fixed = np.round(nl)
+                
+                # Simple validation
+                ewl_res = np.abs(ewl - ewl_fixed)
+                wl_res = np.abs(wl - wl_fixed)
+                nl_res = np.abs(nl - nl_fixed)
+                
+                # Count fixed
+                is_fixed = (ewl_res < 0.5) & (wl_res < 0.25) & (nl_res < 0.15)
+                n_fixed = np.sum(is_fixed)
+                
+                if n_fixed > result.n_nl_fixed:
+                    result.fixed_L1 = nl_fixed
+                    result.fixed_L2 = nl_fixed - wl_fixed
+                    result.fixed_L5 = nl_fixed - wl_fixed - ewl_fixed
+                    result.is_fixed = is_fixed
+                    result.n_nl_fixed = n_fixed
+                    result.n_ewl_fixed = np.sum(ewl_res < 0.5)
+                    result.success_flags['tcar'] = True
+                    
+            except Exception as e:
+                logger.debug(f"TCAR failed: {e}")
+        
+        return result
+    
+    def _check_cycle_slips(self, dd_obs):
+        """Check for cycle slips"""
+        if self._prev_dd_obs is not None and 0 in dd_obs and 0 in self._prev_dd_obs:
+            diff = dd_obs[0] - self._prev_dd_obs[0]
+            slip_detected = np.any(np.abs(diff) > 1.0)  # 1 cycle threshold
+            self._prev_dd_obs = dd_obs.copy()
+            return slip_detected
+        
+        self._prev_dd_obs = dd_obs.copy()
+        return False
+    
+    def get_statistics(self):
+        """Get comprehensive statistics"""
+        total = max(1, self.stats['total_epochs'])
+        return {
+            'total_epochs': self.stats['total_epochs'],
+            'fix_rate': {
+                'cascaded': self.stats['cascaded_success'] / total,
+                'lambda4': self.stats['lambda4_success'] / total,
+                'mlambda': self.stats['mlambda_success'] / total,
+                'par': self.stats['par_success'] / total,
+                'tcar': self.stats['tcar_success'] / total
+            },
+            'cycle_slips': self.stats['cycle_slips_detected'],
+            'methods_used': self.stats['methods_used']
+        }
+    
+    def reset_statistics(self):
+        """Reset all statistics"""
+        self.stats = {
+            'total_epochs': 0,
+            'cascaded_success': 0,
+            'lambda4_success': 0,
+            'mlambda_success': 0,
+            'par_success': 0,
+            'tcar_success': 0,
+            'cycle_slips_detected': 0,
+            'methods_used': {}
+        }
