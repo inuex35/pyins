@@ -15,7 +15,7 @@
 """RTK processing module for pyins"""
 
 from .ambiguity_resolution import RTKAmbiguityManager
-from .lambda_greatpvt import GreatPVTLambdaResolver
+from .greatpvt_resolver import GreatPVTResolver
 from .lambda_rtklib import RTKLIBAmbiguityResolver
 from .cycle_slip import CycleSlipDetector
 from .dd_least_squares import DDLeastSquares, interpolate_epoch, interpolate_observations
@@ -29,7 +29,7 @@ __all__ = [
     'interpolate_epoch',
     'interpolate_observations',
     'RTKAmbiguityManager',
-    'GreatPVTLambdaResolver',
+    'GreatPVTResolver',
     'RTKLIBAmbiguityResolver',
     'CycleSlipDetector',
     'RTKProcessor'
