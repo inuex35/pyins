@@ -277,31 +277,133 @@ class CarrierPhaseDD:
                 # No data available
                 return {}, {}, {}, {'n_freq': 0, 'freq_indices': []}
 
+    def estimate_phase_bias(self, rover_obs, base_obs, freq_idx=0):
+        """Estimate single-differenced phase bias like RTKLIB
+        
+        This removes the large cumulative phase count that accumulates
+        since GPS system start.
+        
+        Parameters:
+        -----------
+        rover_obs : list
+            Rover observations
+        base_obs : list
+            Base observations  
+        freq_idx : int
+            Frequency index (0=L1, 1=L2, 2=L5)
+            
+        Returns:
+        --------
+        bias : dict
+            Phase bias for each satellite in cycles
+        """
+        bias = {}
+        
+        for rov_obs in rover_obs:
+            # Find matching base observation
+            base_match = None
+            for base_obs_item in base_obs:
+                if base_obs_item.sat == rov_obs.sat:
+                    base_match = base_obs_item
+                    break
+            
+            if base_match is None:
+                continue
+                
+            # Get carrier phase in cycles (already in cycles from RINEX)
+            if freq_idx < len(rov_obs.L) and freq_idx < len(base_match.L):
+                rov_phase = rov_obs.L[freq_idx]  # cycles
+                base_phase = base_match.L[freq_idx]  # cycles
+                
+                if rov_phase == 0 or base_phase == 0:
+                    continue
+                    
+                # Single-differenced phase
+                sd_phase = rov_phase - base_phase  # cycles
+                
+                # Get pseudorange in meters
+                if freq_idx < len(rov_obs.P) and freq_idx < len(base_match.P):
+                    rov_pr = rov_obs.P[freq_idx]  # meters
+                    base_pr = base_match.P[freq_idx]  # meters
+                    
+                    if rov_pr == 0 or base_pr == 0:
+                        continue
+                        
+                    # Single-differenced pseudorange
+                    sd_pr = rov_pr - base_pr  # meters
+                    
+                    # Get wavelength
+                    wavelength = self.get_wavelength(rov_obs.sat, freq_idx)
+                    
+                    # Convert pseudorange to cycles
+                    sd_pr_cycles = sd_pr / wavelength
+                    
+                    # Estimate bias as phase - pseudorange (both in cycles)
+                    # This is what RTKLIB does: bias = cp - pr*freq/c
+                    bias[rov_obs.sat] = sd_phase - sd_pr_cycles
+        
+        return bias
+    
+    def apply_phase_bias_correction(self, dd_phase_cycles, sat_pairs, phase_bias):
+        """Apply phase bias correction to DD measurements
+        
+        Parameters:
+        -----------
+        dd_phase_cycles : np.ndarray
+            Original DD phase measurements in cycles
+        sat_pairs : list
+            List of (ref_sat, other_sat) tuples
+        phase_bias : dict
+            Phase bias for each satellite
+            
+        Returns:
+        --------
+        corrected_dd : np.ndarray
+            Bias-corrected DD phase in cycles
+        """
+        corrected_dd = np.zeros_like(dd_phase_cycles)
+        
+        for i, (ref_sat, other_sat) in enumerate(sat_pairs):
+            # Get single-differenced biases
+            bias_ref = phase_bias.get(ref_sat, 0.0)
+            bias_other = phase_bias.get(other_sat, 0.0)
+            
+            # Double-differenced bias
+            dd_bias = bias_other - bias_ref
+            
+            # Apply correction
+            corrected_dd[i] = dd_phase_cycles[i] - dd_bias
+            
+        return corrected_dd
+    
     def estimate_float_ambiguities(self,
                                   dd_phase_cycles: np.ndarray,
                                   dd_range_m: np.ndarray,
-                                  wavelengths: np.ndarray) -> np.ndarray:
+                                  wavelengths: np.ndarray,
+                                  bias_corrected: bool = False) -> np.ndarray:
         """Estimate float ambiguities from phase and range
 
         Parameters:
         -----------
         dd_phase_cycles : np.ndarray
-            DD carrier phase in cycles
+            DD carrier phase in cycles (optionally bias-corrected)
         dd_range_m : np.ndarray
             DD geometric range in meters
         wavelengths : np.ndarray
             Carrier wavelengths in meters
+        bias_corrected : bool
+            Whether phase has already been bias-corrected
 
         Returns:
         --------
         float_ambiguities : np.ndarray
             Float ambiguity estimates in cycles
         """
-        # Convert phase to meters
-        dd_phase_m = dd_phase_cycles * wavelengths
-
-        # Float ambiguity in cycles
-        float_ambiguities = (dd_phase_m - dd_range_m) / wavelengths
+        # Convert range to cycles
+        dd_range_cycles = dd_range_m / wavelengths
+        
+        # Float ambiguity = phase - range (both in cycles)
+        float_ambiguities = dd_phase_cycles - dd_range_cycles
 
         return float_ambiguities
 
