@@ -94,7 +94,10 @@ class GreatPVTResolver:
                  enable_partial: bool = True,
                  min_ratio: float = 3.0,
                  min_success_rate: float = 0.95,
-                 enable_all_methods: bool = True):
+                 enable_all_methods: bool = True,
+                 residual_threshold: float = 0.15,
+                 enable_valpos: bool = True,
+                 valpos_sigma_factor: float = 4.0):
         """
         Initialize GreatPVT resolver with all methods
         
@@ -112,6 +115,12 @@ class GreatPVTResolver:
             Minimum bootstrapping success rate
         enable_all_methods : bool
             Enable all AR methods (LAMBDA, PAR, etc.)
+        residual_threshold : float
+            Maximum residual between float and fixed (cycles) - like RTKLIB valpos
+        enable_valpos : bool
+            Enable RTKLIB-style post-fit residual validation
+        valpos_sigma_factor : float
+            Sigma factor for variance-weighted residual test (default 4.0 = 4-sigma)
         """
         self.wl_threshold = wl_threshold
         self.nl_threshold = nl_threshold
@@ -119,6 +128,9 @@ class GreatPVTResolver:
         self.min_ratio = min_ratio
         self.min_success_rate = min_success_rate
         self.enable_all_methods = enable_all_methods
+        self.residual_threshold = residual_threshold
+        self.enable_valpos = enable_valpos
+        self.valpos_sigma_factor = valpos_sigma_factor
         
         # Lazy loading of components
         self._lambda4 = None
@@ -261,6 +273,56 @@ class GreatPVTResolver:
         
         return result
     
+    def valpos_validate(self, float_amb: np.ndarray, fixed_amb: np.ndarray, 
+                       covariance: Optional[np.ndarray] = None) -> bool:
+        """
+        RTKLIB-style post-fit residual validation (valpos)
+        
+        Parameters
+        ----------
+        float_amb : np.ndarray
+            Float ambiguities
+        fixed_amb : np.ndarray
+            Fixed (integer) ambiguities
+        covariance : np.ndarray, optional
+            Covariance matrix of float ambiguities
+            
+        Returns
+        -------
+        bool
+            True if validation passes, False otherwise
+        """
+        if not self.enable_valpos:
+            return True
+            
+        # Calculate residuals
+        residuals = float_amb - fixed_amb
+        n_amb = len(residuals)
+        
+        # Method 1: Simple residual threshold check
+        max_residual = np.max(np.abs(residuals))
+        if max_residual > self.residual_threshold:
+            logger.debug(f"Valpos failed: max residual {max_residual:.3f} > {self.residual_threshold:.3f} cycles")
+            return False
+        
+        # Method 2: Variance-weighted check (if covariance available)
+        if covariance is not None:
+            try:
+                # Check each residual against its variance
+                variances = np.diag(covariance)
+                for i in range(n_amb):
+                    if variances[i] > 0:
+                        # Normalized residual test
+                        normalized = abs(residuals[i]) / np.sqrt(variances[i])
+                        if normalized > self.valpos_sigma_factor:
+                            logger.debug(f"Valpos failed: residual[{i}] = {residuals[i]:.3f}, "
+                                       f"normalized = {normalized:.2f} > {self.valpos_sigma_factor:.1f} sigma")
+                            return False
+            except Exception as e:
+                logger.debug(f"Variance-weighted check failed: {e}")
+        
+        return True
+    
     def _try_cascaded_resolution(self, dd_obs, dd_ranges, sat_pairs, result):
         """Try cascaded WL->NL resolution"""
         result.methods_tried.append('cascaded')
@@ -287,19 +349,35 @@ class GreatPVTResolver:
         nl_fixed = 0
         nl_ambiguities = np.zeros(n_amb)
         is_fixed = np.zeros(n_amb, dtype=bool)
+        float_ambiguities = dd_obs[0][:n_amb] if 0 in dd_obs else np.zeros(n_amb)
         
         for i in range(n_amb):
             # Use WL to help NL if available
             constraint = 0.5 if i < len(wl_ambiguities) and wl_ambiguities[i] != 0 else 1.0
             
             # Try to fix NL
-            nl_float = dd_obs[0][i] if 0 in dd_obs else 0
+            nl_float = float_ambiguities[i]
             if abs(nl_float - round(nl_float)) < self.nl_threshold * constraint:
                 nl_ambiguities[i] = round(nl_float)
                 is_fixed[i] = True
                 nl_fixed += 1
         
-        # Update result if better
+        # Apply valpos validation before accepting the fix
+        if nl_fixed > 0:
+            # Get fixed indices for validation
+            fixed_indices = np.where(is_fixed)[0]
+            float_subset = float_ambiguities[fixed_indices]
+            fixed_subset = nl_ambiguities[fixed_indices]
+            
+            # Validate using valpos
+            if not self.valpos_validate(float_subset, fixed_subset):
+                logger.info(f"Cascaded resolution rejected by valpos validation")
+                # Reset if validation fails
+                nl_fixed = 0
+                is_fixed[:] = False
+                result.success_flags['valpos_rejected'] = True
+        
+        # Update result if better and validated
         if nl_fixed > result.n_nl_fixed:
             result.fixed_L1 = nl_ambiguities
             result.is_fixed = is_fixed
@@ -339,12 +417,17 @@ class GreatPVTResolver:
                 ratio = np.sqrt(disall[1] / disall[0])
                 
                 if ratio >= self.min_ratio and boot[0] >= self.min_success_rate:
-                    result.fixed_L1 = cands[:, 0]
-                    result.is_fixed = np.ones(n_amb, dtype=bool)
-                    result.n_nl_fixed = n_amb
-                    result.ratio_nl = ratio
-                    result.bootstrap_rate = boot[0]
-                    result.success_flags['lambda4'] = True
+                    # Apply valpos validation
+                    if self.valpos_validate(float_amb, cands[:, 0], Q):
+                        result.fixed_L1 = cands[:, 0]
+                        result.is_fixed = np.ones(n_amb, dtype=bool)
+                        result.n_nl_fixed = n_amb
+                        result.ratio_nl = ratio
+                        result.bootstrap_rate = boot[0]
+                        result.success_flags['lambda4'] = True
+                    else:
+                        logger.info(f"LAMBDA4 rejected by valpos: ratio={ratio:.2f}, boot={boot[0]:.3f}")
+                        result.success_flags['valpos_rejected'] = True
                     
         except Exception as e:
             logger.debug(f"LAMBDA4 failed: {e}")
@@ -368,11 +451,16 @@ class GreatPVTResolver:
                 ratio = np.sqrt(residuals[1] / residuals[0])
                 
                 if ratio >= self.min_ratio:
-                    result.fixed_L1 = fixed_candidates[:, 0]
-                    result.is_fixed = np.ones(n_amb, dtype=bool)
-                    result.n_nl_fixed = n_amb
-                    result.ratio_nl = ratio
-                    result.success_flags['mlambda'] = True
+                    # Apply valpos validation
+                    if self.valpos_validate(float_amb, fixed_candidates[:, 0], Q):
+                        result.fixed_L1 = fixed_candidates[:, 0]
+                        result.is_fixed = np.ones(n_amb, dtype=bool)
+                        result.n_nl_fixed = n_amb
+                        result.ratio_nl = ratio
+                        result.success_flags['mlambda'] = True
+                    else:
+                        logger.info(f"MLAMBDA rejected by valpos: ratio={ratio:.2f}")
+                        result.success_flags['valpos_rejected'] = True
                     
         except Exception as e:
             logger.debug(f"MLAMBDA failed: {e}")
