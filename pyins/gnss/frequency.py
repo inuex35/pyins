@@ -90,3 +90,27 @@ def sat2freq(sat, frq_idx=0, glo_fcn=0):
 
     return 0.0
 
+
+def sat2wavelength(sat, frq_idx=0, glo_fcn=0):
+    """
+    Get carrier wavelength for a satellite
+    
+    Parameters
+    ----------
+    sat : int
+        Satellite number
+    frq_idx : int
+        Frequency index (0=L1/B1I/E1, 1=L2/B2I/E5b, 2=L5/B2a/E5a)
+    glo_fcn : int
+        GLONASS frequency channel number (-7 to +6)
+    
+    Returns
+    -------
+    float
+        Carrier wavelength in meters
+    """
+    freq = sat2freq(sat, frq_idx, glo_fcn)
+    if freq > 0:
+        return CLIGHT / freq
+    return 0.0
+

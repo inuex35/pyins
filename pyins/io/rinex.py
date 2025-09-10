@@ -138,6 +138,7 @@ class RinexObsReader:
         self.header = {}
         self.observations = []
         self.max_frequencies = max_frequencies  # Support up to 5 frequencies
+        self.approx_position = None  # Store APPROX POSITION XYZ from header
 
     def read(self) -> list[dict]:
         """Read RINEX observation file"""
@@ -154,7 +155,12 @@ class RinexObsReader:
             # Read observation file
             obs_data = read_obsFile(self.filename)
 
-            # Extract header info
+            # Extract header info including APPROX POSITION XYZ
+            if hasattr(obs_data, 'approx_position') and obs_data.approx_position is not None:
+                # gnsspy stores position as numpy array [X, Y, Z]
+                self.approx_position = np.array(obs_data.approx_position)
+                logger.info(f"  Read APPROX POSITION XYZ from header: {self.approx_position}")
+            
             self.header = {
                 'approx_pos': obs_data.approx_position if hasattr(obs_data, 'approx_position') else None,
                 'interval': obs_data.interval if hasattr(obs_data, 'interval') else None,

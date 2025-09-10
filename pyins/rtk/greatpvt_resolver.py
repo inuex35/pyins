@@ -383,6 +383,30 @@ class GreatPVTResolver:
             result.is_fixed = is_fixed
             result.n_nl_fixed = nl_fixed
             result.success_flags['cascaded'] = True
+            
+            # Calculate ratio for cascaded resolution
+            # Ratio is based on how many ambiguities were successfully fixed
+            # and how close they were to integers
+            if n_amb > 0:
+                # Calculate average residual from integer
+                residuals = []
+                for i in range(n_amb):
+                    if is_fixed[i]:
+                        residual = abs(float_ambiguities[i] - nl_ambiguities[i])
+                        residuals.append(residual)
+                
+                if residuals:
+                    # Convert residuals to a ratio-like metric
+                    # Smaller residuals = higher ratio
+                    avg_residual = np.mean(residuals)
+                    if avg_residual > 0:
+                        # Inverse relationship: smaller residual = higher ratio
+                        # Scale to be similar to LAMBDA ratio (typically 1.5-10)
+                        result.ratio_nl = min(10.0, 0.15 / avg_residual)
+                    else:
+                        result.ratio_nl = 10.0  # Perfect integer
+                else:
+                    result.ratio_nl = 0.0  # No fixes
         
         return result
     
