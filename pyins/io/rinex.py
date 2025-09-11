@@ -257,63 +257,9 @@ class RinexObsReader:
                                     phase_code = signal_code.replace('C', 'L').replace('P', 'L')
                                     
                                 if phase_code in sat_data and not pd.isna(sat_data[phase_code]):
-                                    phase_value = float(sat_data[phase_code])
-                                    # Check if value is in meters (gnsspy sometimes returns meters)
-                                    # Typical carrier phase in cycles is ~100M, in meters is ~20M
-                                    if phase_value > 1e6:  # Likely in meters
-                                        # Convert from meters to cycles using pyins constants
-                                        # Import GLONASS constants for FDMA support
-                                        from ..core.constants import (
-                                            CLIGHT, FREQ_L1, FREQ_L2, FREQ_L5,
-                                            FREQ_E1, FREQ_E5b, FREQ_E5a,
-                                            FREQ_B1I, FREQ_B3, FREQ_B2a,
-                                            FREQ_J1, FREQ_J2, FREQ_J5,
-                                            FREQ_G1, FREQ_G2
-                                        )
-                                        
-                                        if freq_idx == 0:  # L1/E1/B1
-                                            if sys_char == 'G':
-                                                wavelength = CLIGHT / FREQ_L1
-                                            elif sys_char == 'E':
-                                                wavelength = CLIGHT / FREQ_E1
-                                            elif sys_char == 'C':
-                                                wavelength = CLIGHT / FREQ_B1I
-                                            elif sys_char == 'R':
-                                                # GLONASS uses FDMA, use base frequency
-                                                wavelength = CLIGHT / FREQ_G1
-                                            elif sys_char == 'J':
-                                                wavelength = CLIGHT / FREQ_J1
-                                            else:
-                                                wavelength = CLIGHT / FREQ_L1  # Default to GPS L1
-                                        elif freq_idx == 1:  # L2/E5b/B2
-                                            if sys_char == 'G':
-                                                wavelength = CLIGHT / FREQ_L2
-                                            elif sys_char == 'E':
-                                                wavelength = CLIGHT / FREQ_E5b
-                                            elif sys_char == 'C':
-                                                wavelength = CLIGHT / FREQ_B3  # BeiDou B3 for second frequency
-                                            elif sys_char == 'R':
-                                                # GLONASS uses FDMA, use base frequency
-                                                wavelength = CLIGHT / FREQ_G2
-                                            elif sys_char == 'J':
-                                                wavelength = CLIGHT / FREQ_J2
-                                            else:
-                                                wavelength = CLIGHT / FREQ_L2  # Default to GPS L2
-                                        else:  # L5/E5a/B2a (third frequency)
-                                            if sys_char == 'G':
-                                                wavelength = CLIGHT / FREQ_L5
-                                            elif sys_char == 'E':
-                                                wavelength = CLIGHT / FREQ_E5a
-                                            elif sys_char == 'C':
-                                                wavelength = CLIGHT / FREQ_B2a
-                                            elif sys_char == 'J':
-                                                wavelength = CLIGHT / FREQ_J5
-                                            else:
-                                                wavelength = CLIGHT / FREQ_L5  # Default to GPS L5
-                                        
-                                        obs.L[freq_idx] = phase_value / wavelength  # Convert to cycles
-                                    else:
-                                        obs.L[freq_idx] = phase_value  # Already in cycles
+                                    # RINEX 3.04 stores carrier phase in CYCLES
+                                    # Just store the value directly
+                                    obs.L[freq_idx] = float(sat_data[phase_code])
                                     break
                             
                             # Try corresponding Doppler

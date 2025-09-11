@@ -10,6 +10,7 @@ from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
 from ..core.data_structures import Observation
+from ..gnss.phase_processor import CarrierPhaseProcessor
 from typing import Optional
 
 
@@ -422,6 +423,10 @@ class SingleDifferenceProcessor:
         return np.array(sd_pseudorange), np.array(sd_carrier), common_sats
 
 
+# Global phase processors for rover and base
+_rover_phase_processor = None
+_base_phase_processor = None
+
 def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                            reference_ecef, reference_llh,
                            use_systems: list[str] = None,
@@ -465,6 +470,14 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
         - ref_sat_clk: reference satellite clock bias
         - elevation: satellite elevation angle
     """
+    global _rover_phase_processor, _base_phase_processor
+    
+    # Initialize phase processors if needed (always use relative phase like RTKLIB)
+    if _rover_phase_processor is None:
+        _rover_phase_processor = CarrierPhaseProcessor()
+    if _base_phase_processor is None:
+        _base_phase_processor = CarrierPhaseProcessor()
+    
     dd_measurements = []
 
     # Default systems to use
@@ -548,8 +561,12 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 
                 # Add carrier phase if available
                 if rover_cp is not None and base_cp is not None:
-                    freq_data[0]['rover_cp'] = rover_cp
-                    freq_data[0]['base_cp'] = base_cp
+                    # Always convert to relative phase (like RTKLIB)
+                    rover_cp_rel = _rover_phase_processor.process_observation(sat, 0, rover_cp)
+                    base_cp_rel = _base_phase_processor.process_observation(sat, 0, base_cp)
+                    if rover_cp_rel is not None and base_cp_rel is not None:
+                        freq_data[0]['rover_cp'] = rover_cp_rel
+                        freq_data[0]['base_cp'] = base_cp_rel
         else:
             continue
         
@@ -580,8 +597,12 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 base_cp = base_obs_sat.L[freq_idx] if hasattr(base_obs_sat, 'L') and base_obs_sat.L is not None and len(base_obs_sat.L) > freq_idx else None
                 
                 if rover_cp is not None and base_cp is not None:
-                    freq_data[freq_idx]['rover_cp'] = rover_cp
-                    freq_data[freq_idx]['base_cp'] = base_cp
+                    # Always convert to relative phase (like RTKLIB)
+                    rover_cp_rel = _rover_phase_processor.process_observation(sat, freq_idx, rover_cp)
+                    base_cp_rel = _base_phase_processor.process_observation(sat, freq_idx, base_cp)
+                    if rover_cp_rel is not None and base_cp_rel is not None:
+                        freq_data[freq_idx]['rover_cp'] = rover_cp_rel
+                        freq_data[freq_idx]['base_cp'] = base_cp_rel
 
         if not freq_data:
             continue
