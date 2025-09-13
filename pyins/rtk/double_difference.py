@@ -28,6 +28,131 @@ from ..gnss.rtklib_interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
 from ..gnss.residual_interpolation import compute_residual, interpolate_residual, compute_residuals_for_epoch
 
 
+class DoubleDifferenceProcessor:
+    """Process GNSS observations to form double differences"""
+
+    def __init__(self):
+        """Initialize double difference processor"""
+        pass
+
+    def form_double_differences(self, rover_obs, base_obs, frequency_idx=0):
+        """
+        Form double difference observations
+
+        Parameters:
+        -----------
+        rover_obs : list
+            Rover observations
+        base_obs : list
+            Base observations
+        frequency_idx : int
+            Frequency index (default: 0 for L1)
+
+        Returns:
+        --------
+        tuple : (dd_pseudorange, dd_carrier, pairs, reference_sats) or None
+        """
+        # Convert observations to dictionary format if needed
+        if isinstance(rover_obs, list):
+            rover_obs_dict = {obs.sat: obs for obs in rover_obs}
+        else:
+            rover_obs_dict = rover_obs
+
+        if isinstance(base_obs, list):
+            base_obs_dict = {obs.sat: obs for obs in base_obs}
+        else:
+            base_obs_dict = base_obs
+
+        # Find common satellites
+        common_sats = set(rover_obs_dict.keys()) & set(base_obs_dict.keys())
+        if len(common_sats) < 2:
+            return None
+
+        # Group by system and find reference satellite (highest PRN for simplicity)
+        from collections import defaultdict
+        system_sats = defaultdict(list)
+        sys_map = {SYS_GPS: 'G', SYS_GLO: 'R', SYS_GAL: 'E', SYS_BDS: 'C', SYS_QZS: 'J'}
+
+        for sat in common_sats:
+            sys_id = sat2sys(sat)
+            sys_char = sys_map.get(sys_id, 'U')
+            system_sats[sys_char].append(sat)
+
+        dd_pseudorange = []
+        dd_carrier = []
+        pairs = []
+        reference_sats = {}
+
+        for system, sats in system_sats.items():
+            if len(sats) < 2:
+                continue
+
+            # Select reference satellite (highest PRN)
+            ref_sat = max(sats)
+            reference_sats[system] = ref_sat
+
+            ref_rover_obs = rover_obs_dict[ref_sat]
+            ref_base_obs = base_obs_dict[ref_sat]
+
+            # Form DDs for each satellite vs reference
+            for sat in sats:
+                if sat == ref_sat:
+                    continue
+
+                rover_obs_sat = rover_obs_dict[sat]
+                base_obs_sat = base_obs_dict[sat]
+
+                # Check if observations have required frequency
+                if (len(rover_obs_sat.P) <= frequency_idx or
+                    len(base_obs_sat.P) <= frequency_idx or
+                    len(ref_rover_obs.P) <= frequency_idx or
+                    len(ref_base_obs.P) <= frequency_idx):
+                    continue
+
+                # Get pseudorange observations
+                rover_pr = rover_obs_sat.P[frequency_idx]
+                base_pr = base_obs_sat.P[frequency_idx]
+                ref_rover_pr = ref_rover_obs.P[frequency_idx]
+                ref_base_pr = ref_base_obs.P[frequency_idx]
+
+                if 0 in [rover_pr, base_pr, ref_rover_pr, ref_base_pr]:
+                    continue
+
+                # Form double difference pseudorange
+                sd_rover = rover_pr - ref_rover_pr
+                sd_base = base_pr - ref_base_pr
+                dd_pr = sd_rover - sd_base
+                dd_pseudorange.append(dd_pr)
+
+                # Form double difference carrier phase if available
+                dd_cp = 0.0
+                if (hasattr(rover_obs_sat, 'L') and hasattr(base_obs_sat, 'L') and
+                    hasattr(ref_rover_obs, 'L') and hasattr(ref_base_obs, 'L')):
+
+                    if (len(rover_obs_sat.L) > frequency_idx and
+                        len(base_obs_sat.L) > frequency_idx and
+                        len(ref_rover_obs.L) > frequency_idx and
+                        len(ref_base_obs.L) > frequency_idx):
+
+                        rover_cp = rover_obs_sat.L[frequency_idx]
+                        base_cp = base_obs_sat.L[frequency_idx]
+                        ref_rover_cp = ref_rover_obs.L[frequency_idx]
+                        ref_base_cp = ref_base_obs.L[frequency_idx]
+
+                        if 0 not in [rover_cp, base_cp, ref_rover_cp, ref_base_cp]:
+                            sd_rover_cp = rover_cp - ref_rover_cp
+                            sd_base_cp = base_cp - ref_base_cp
+                            dd_cp = sd_rover_cp - sd_base_cp
+
+                dd_carrier.append(dd_cp)
+                pairs.append((ref_sat, sat))
+
+        if not dd_pseudorange:
+            return None
+
+        return (np.array(dd_pseudorange), np.array(dd_carrier), pairs, reference_sats)
+
+
 def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=30.0, interpolate=True):
     """
     Combine base and rover observations with RTKLIB-style interpolation
