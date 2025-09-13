@@ -23,7 +23,7 @@ from ..core.constants import CLIGHT, SYS_GLO, sat2sys
 from ..core.data_structures import Observation
 from ..core.unified_time import TimeCore, TimeSystem
 from ..gnss.ephemeris import eph2pos, seleph
-from .double_difference import DoubleDifferenceProcessor
+# from .double_difference import DoubleDifferenceProcessor  # Removed - no longer exists
 
 
 def interpolate_observations(obs1, obs2, t1, t2, t_target):
@@ -104,16 +104,12 @@ def interpolate_epoch(epoch1, epoch2, t_target):
 class DDLeastSquares:
     """Double Difference Least Squares solver for RTK positioning"""
 
-    def __init__(self, dd_processor: Optional[DoubleDifferenceProcessor] = None):
+    def __init__(self):
         """
         Initialize DD least squares solver
-
-        Parameters:
-        -----------
-        dd_processor : DoubleDifferenceProcessor, optional
-            DD processor instance
         """
-        self.dd_processor = dd_processor or DoubleDifferenceProcessor()
+        # No processor needed - we'll use form_double_differences directly
+        pass
 
     def solve_baseline(self,
                       rover_obs: list[Observation],
@@ -158,10 +154,12 @@ class DDLeastSquares:
         base_obs_valid = [obs for obs in base_obs
                          if obs.P[0] > 0 and obs.L[0] > 0 and sat2sys(obs.sat) != SYS_GLO]
 
-        # Form double differences
-        dd_pr, dd_cp, sat_pairs, ref_sats = self.dd_processor.form_double_differences(
-            rover_obs_valid, base_obs_valid
-        )
+        # Form double differences using the imported function
+        from .double_difference import form_double_differences
+        
+        # Need to restructure this to use the new form_double_differences function
+        # This class needs significant refactoring to work with the new API
+        raise NotImplementedError("DDLeastSquares needs refactoring to work with new form_double_differences API")
 
         if len(dd_pr) < 3:
             raise ValueError(f"Not enough DD observations: {len(dd_pr)}")
@@ -189,15 +187,12 @@ class DDLeastSquares:
             rover_pos = base_pos + baseline
 
             # Compute geometry matrix
-            H = self.dd_processor.compute_dd_geometry_matrix(
-                sat_positions, rover_pos, valid_pairs
-            )
+            # This needs to be reimplemented without dd_processor
+            raise NotImplementedError("Geometry matrix computation needs reimplementation")
 
             # Compute DD residuals
-            residuals = self.dd_processor.compute_dd_residuals(
-                valid_dd_pr, sat_positions, rover_pos, base_pos,
-                valid_pairs, use_carrier=False
-            )
+            # This needs to be reimplemented without dd_processor
+            residuals = None
 
             # Least squares solution
             # Normal equation: (H^T * H) * dx = H^T * residuals
@@ -217,11 +212,8 @@ class DDLeastSquares:
 
         # Final residuals
         rover_pos = base_pos + baseline
-        final_residuals = self.dd_processor.compute_dd_residuals(
-            valid_dd_pr, sat_positions, rover_pos, base_pos,
-            valid_pairs, use_carrier=False
-        )
-        residual_rms = np.sqrt(np.mean(final_residuals**2))
+        # This needs to be reimplemented without dd_processor
+        residual_rms = 0.0  # Placeholder
 
         return baseline, residual_rms, iteration + 1
 
