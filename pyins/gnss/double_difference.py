@@ -150,7 +150,7 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                                     reference_ecef, reference_llh,
                                     use_systems: list[str] = None,
                                     cutoff_angle: float = 15.0,
-                                    use_residual_interp: bool = False,
+                                    use_residual_interp: bool = True,  # Enable by default for better accuracy
                                     rover_position: np.ndarray = None) -> list[dict]:
     """
     Form double differences from pre-synchronized observation pairs
@@ -477,11 +477,17 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                         'base_ref_sat_pos': ref_data['base_sat_pos'],
                         'base_sat_clk': data['base_sat_clk'],
                         'base_ref_sat_clk': ref_data['base_sat_clk'],
+                        # Include raw observations for proper factor computation
+                        'rover_pr': freq_data['rover_pr'],  # Rover pseudorange to other sat
+                        'rover_pr_ref': ref_freq_data['rover_pr'],  # Rover pseudorange to ref sat
+                        'base_pr': freq_data['base_pr'],  # Base pseudorange to other sat
+                        'base_pr_ref': ref_freq_data['base_pr'],  # Base pseudorange to ref sat
                         'elevation': data['elevation'],
                         'freq_idx': freq_idx,
                         'system': system_char,
                         'time': rover_time,
-                        'time_diff': time_diff
+                        'time_diff': time_diff,
+                        'use_residual_interp': use_residual_interp  # Flag indicating computation method
                     })
         
         print(f"  Formed {len(dd_measurements)} DD measurements")
@@ -497,19 +503,41 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
 def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                           reference_ecef, reference_llh,
                           use_systems=None, cutoff_angle=15.0,
-                          use_residual_interp=False, rover_position=None):
+                          use_residual_interp=True, rover_position=None):
     """
     Legacy API for forming double differences - single epoch
     
     This wraps the combined implementation for backward compatibility
     """
-    # Create single-epoch lists
+    # Extract actual time from observations if available
+    # This handles cases where rover and base have different times
+    rover_time = gps_time
+    base_time = gps_time
+    
+    # Check if observations have time information
+    if rover_obs and hasattr(rover_obs[0], 'time'):
+        rover_time = rover_obs[0].time
+    elif rover_obs and isinstance(rover_obs, dict):
+        # If observations are in dict format
+        first_obs = next(iter(rover_obs.values()), None)
+        if first_obs and hasattr(first_obs, 'time'):
+            rover_time = first_obs.time
+    
+    if base_obs and hasattr(base_obs[0], 'time'):
+        base_time = base_obs[0].time
+    elif base_obs and isinstance(base_obs, dict):
+        # If observations are in dict format
+        first_obs = next(iter(base_obs.values()), None)
+        if first_obs and hasattr(first_obs, 'time'):
+            base_time = first_obs.time
+    
+    # Create single-epoch lists with actual times
     rover_epoch = {
-        'gps_time': gps_time,
+        'gps_time': rover_time,
         'observations': rover_obs
     }
     base_epoch = {
-        'gps_time': gps_time,
+        'gps_time': base_time,
         'observations': base_obs
     }
     

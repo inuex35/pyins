@@ -62,9 +62,26 @@ class DDPseudorangeFactor:
         self.sat_other = dd_data.get('sat', 0)
         self.freq_idx = dd_data.get('freq_idx', 0)  # Get frequency index from DD data
         
-        # DD cancels satellite clock biases, so we don't need them
-        # self.sat_clk_other = dd_data.get('sat_clk', 0.0)
-        # self.sat_clk_ref = dd_data.get('ref_sat_clk', 0.0)
+        # Store satellite clock biases - needed for residual-based DD
+        self.sat_clk_other = dd_data.get('sat_clk', 0.0)
+        self.sat_clk_ref = dd_data.get('ref_sat_clk', 0.0)
+        
+        # CRITICAL: Extract BASE satellite positions and clocks (at base time)
+        # When there's a time difference between rover and base observations,
+        # we MUST use base satellite positions/clocks for base calculations
+        self.base_sat_pos_ref = dd_data.get('base_ref_sat_pos', dd_data.get('base_sat_pos_ref', self.sat_pos_ref))[:3]
+        self.base_sat_pos_other = dd_data.get('base_sat_pos', dd_data.get('base_sat_pos_other', self.sat_pos_other))[:3]
+        self.base_sat_clk_ref = dd_data.get('base_ref_sat_clk', self.sat_clk_ref)
+        self.base_sat_clk_other = dd_data.get('base_sat_clk', self.sat_clk_other)
+        
+        # Extract raw observations for proper DD computation
+        # When residual interpolation is used, we need raw observations
+        self.use_residual_interp = dd_data.get('use_residual_interp', False)
+        if self.use_residual_interp:
+            self.rover_pr_other = dd_data.get('rover_pr', 0.0)
+            self.rover_pr_ref = dd_data.get('rover_pr_ref', 0.0)
+            self.base_pr_other = dd_data.get('base_pr', 0.0)
+            self.base_pr_ref = dd_data.get('base_pr_ref', 0.0)
         
         # Store other parameters
         self.base_pos_ecef = base_pos_ecef
@@ -79,10 +96,11 @@ class DDPseudorangeFactor:
         freq_map = [FREQ_L1, FREQ_L2, FREQ_L5]
         self.frequency = freq_map[min(self.freq_idx, 2)]
         
-        # Pre-compute base station ranges (satellite clock already applied in DD formation)
-        # Note: DD observations already include satellite clock corrections
-        self.range_base_ref = np.linalg.norm(self.sat_pos_ref - base_pos_ecef)
-        self.range_base_other = np.linalg.norm(self.sat_pos_other - base_pos_ecef)
+        # Pre-compute base station ranges WITH satellite clock corrections
+        # CRITICAL: Use BASE satellite positions/clocks (at base time), not rover's!
+        # This is essential when rover and base observations have different times
+        self.range_base_ref = np.linalg.norm(self.base_sat_pos_ref - base_pos_ecef) - CLIGHT * self.base_sat_clk_ref
+        self.range_base_other = np.linalg.norm(self.base_sat_pos_other - base_pos_ecef) - CLIGHT * self.base_sat_clk_other
         
         # Debug (commented out for performance)
         # print(f"Factor init: base-other={self.range_base_other:.3f}, base-ref={self.range_base_ref:.3f}")
@@ -159,22 +177,54 @@ class DDPseudorangeFactor:
             # Convert to ECEF
             rover_ecef = self.base_pos_ecef + self.R_enu2ecef @ rover_enu
             
-            # Compute all 4 ranges (satellite clock already applied in DD observations)
-            # rho_rov: rover to other satellite (geometric only)
+            # Compute geometric ranges (always needed for sanity check)
             vec_rover_other = self.sat_pos_other - rover_ecef
             geom_range_rover_other = np.linalg.norm(vec_rover_other)
-            range_rover_other = geom_range_rover_other
             
-            # rho_ref: base to other satellite (pre-computed)
-            range_base_other = self.range_base_other
-            
-            # rho_rov_base: rover to reference satellite (geometric only)
             vec_rover_ref = self.sat_pos_ref - rover_ecef
             geom_range_rover_ref = np.linalg.norm(vec_rover_ref)
-            range_rover_ref = geom_range_rover_ref
             
-            # rho_ref_base: base to reference satellite (pre-computed)
+            # Compute rover ranges WITH satellite clock corrections
+            range_rover_other = geom_range_rover_other - CLIGHT * self.sat_clk_other
+            range_rover_ref = geom_range_rover_ref - CLIGHT * self.sat_clk_ref
+            
+            # Base ranges already pre-computed with satellite clock (use self. variables)
+            range_base_other = self.range_base_other
             range_base_ref = self.range_base_ref
+            
+            # Check if we're using residual interpolation
+            if self.use_residual_interp and self.rover_pr_other > 0:
+                # PROPER DD COMPUTATION WITH RAW OBSERVATIONS
+                # When we have raw observations, compute DD correctly:
+                # DD = (rover_other - rover_ref) - (base_other - base_ref)
+                
+                # Single differences
+                sd_rover = self.rover_pr_other - self.rover_pr_ref
+                sd_base = self.base_pr_other - self.base_pr_ref
+                
+                # Double difference of observations
+                dd_observations = sd_rover - sd_base
+                
+                # DD of computed ranges
+                dd_computed = (range_rover_other - range_base_other) - (range_rover_ref - range_base_ref)
+                
+                # Residual is the difference
+                residual = dd_observations - dd_computed
+                
+            else:
+                # FALLBACK: When raw observations not available
+                # Assume dd_obs is DD of residuals (from residual interpolation)
+                # In this case, dd_obs already IS the residual at the reference position
+                # We need to adjust it based on position change
+                
+                # Compute DD geometric
+                dd_geometric = (range_rover_other - range_base_other) - (range_rover_ref - range_base_ref)
+                
+                # For residual-based DD, the measurement IS the residual at reference position
+                # We compute how the geometric DD changes from reference
+                # But this is problematic without knowing the reference position...
+                # For now, treat dd_obs as a direct measurement
+                residual = self.dd_measurement - dd_geometric
             
             # Apply atmospheric corrections if enabled
             if self.use_atmospheric:
@@ -215,13 +265,7 @@ class DDPseudorangeFactor:
                 # Too close to satellite (numerical issue)
                 return np.array([0.0])
             
-            # Compute DD range: (rover-sat - base-sat) - (rover-ref - base-ref)
-            # This matches how DD observations are formed
-            dd_geometric = (range_rover_other - range_base_other) - (range_rover_ref - range_base_ref)
-            
-            # Residual (following RTKLIB convention)
-            # v = measured - computed
-            residual = self.dd_measurement - dd_geometric
+            # Residual has already been computed in the if-else block above
             
             # Debug output (commented out for performance)
             # if abs(residual) > 30:  # Log moderate residuals too
