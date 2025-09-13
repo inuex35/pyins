@@ -9,12 +9,11 @@ from collections import defaultdict
 from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS, sat2sys
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
-from ..gnss.rtklib_interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
 
 
-def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=0.5, interpolate=True):
+def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=0.5):
     """
-    Combine base and rover observations with RTKLIB-style interpolation
+    Combine base and rover observations into a time-sorted list for better matching
     
     Parameters:
     -----------
@@ -24,8 +23,6 @@ def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time
         List of base observations (list of epochs with 'observations' dict)
     max_time_diff : float
         Maximum time difference for pairing (default: 0.5 seconds)
-    interpolate : bool
-        Whether to interpolate base observations (default: True)
         
     Returns:
     --------
@@ -47,97 +44,40 @@ def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time
     if not rover_obs_list or not base_obs_list:
         return []
     
-    # Sort base observations by time for interpolation
-    base_sorted = sorted(base_obs_list, key=lambda x: get_time(x) or 0)
-    
     synchronized_pairs = []
     
-    # For each rover observation, find or interpolate base observation
+    # For each rover observation, find the closest base observation
     for rover_obs in rover_obs_list:
         rover_time = get_time(rover_obs)
         if rover_time is None:
             continue
             
-        # Find bracketing base observations for interpolation
-        base_before = None
-        base_after = None
-        base_exact = None
+        # Find closest base observation
+        best_base = None
+        best_time_diff = float('inf')
         
-        for i, base_obs in enumerate(base_sorted):
+        for base_obs in base_obs_list:
             base_time = get_time(base_obs)
             if base_time is None:
                 continue
                 
-            if abs(base_time - rover_time) < DTTOL:  # RTKLIBの許容値を使用
-                base_exact = base_obs
-                break
-            elif base_time < rover_time:
-                base_before = (i, base_obs, base_time)
-            elif base_time > rover_time and base_after is None:
-                base_after = (i, base_obs, base_time)
-                break
+            time_diff = abs(rover_time - base_time)
+            
+            if time_diff < best_time_diff and time_diff <= max_time_diff:
+                best_time_diff = time_diff
+                best_base = base_obs
         
-        # Use exact match if available
-        if base_exact is not None:
+        if best_base is not None:
             synchronized_pairs.append({
                 'rover_obs': rover_obs,
-                'base_obs': base_exact,
+                'base_obs': best_base,
                 'rover_time': rover_time,
-                'base_time': get_time(base_exact),
-                'time_diff': 0.0,
-                'interpolated': False
+                'base_time': get_time(best_base),
+                'time_diff': rover_time - get_time(best_base)
             })
-            print(f"INFO: Exact time match (dt=0.0ms)")
-            
-        # Otherwise try interpolation if enabled (RTKLIBスタイル)
-        elif interpolate and base_before is not None and base_after is not None:
-            idx_before, obs_before, time_before = base_before
-            idx_after, obs_after, time_after = base_after
-            
-            # Check if interpolation span is reasonable
-            if time_after - time_before <= 2.0:  # Max 2 second span for reliability
-                # RTKLIBスタイルの補間を実行
-                base_interp = interpolate_base_epoch(
-                    obs_before, obs_after,
-                    time_before, time_after,
-                    rover_time
-                )
-                
-                synchronized_pairs.append({
-                    'rover_obs': rover_obs,
-                    'base_obs': base_interp,
-                    'rover_time': rover_time,
-                    'base_time': rover_time,  # 補間後は同じ時刻
-                    'time_diff': 0.0,  # 補間により時刻差はゼロ
-                    'interpolated': True
-                })
-                print(f"INFO: RTKLIB-interpolated for rover time {rover_time:.1f} (base: {time_before:.1f}-{time_after:.1f})")
-        
-        # Fall back to closest observation
-        else:
-            best_base = None
-            best_time_diff = float('inf')
-            
-            for base_obs in base_sorted:
-                base_time = get_time(base_obs)
-                if base_time is None:
-                    continue
-                    
-                time_diff = abs(rover_time - base_time)
-                
-                if time_diff < best_time_diff and time_diff <= max_time_diff:
-                    best_time_diff = time_diff
-                    best_base = base_obs
-            
-            if best_base is not None:
-                synchronized_pairs.append({
-                    'rover_obs': rover_obs,
-                    'base_obs': best_base,
-                    'rover_time': rover_time,
-                    'base_time': get_time(best_base),
-                    'time_diff': rover_time - get_time(best_base),
-                    'interpolated': False
-                })
+            if best_time_diff < 0.001:
+                print(f"INFO: Exact time match (dt={best_time_diff*1000:.1f}ms)")
+            else:
                 print(f"INFO: Paired rover {rover_time:.1f} with base {get_time(best_base):.1f} (diff={best_time_diff:.3f}s)")
     
     return synchronized_pairs
@@ -206,10 +146,7 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
         common_sats = rover_sats & base_sats
         
         if len(common_sats) < 2:
-            # Debug output
-            print(f"  DEBUG: Rover sats: {len(rover_sats)}, Base sats: {len(base_sats)}, Common: {len(common_sats)}")
-            if len(common_sats) > 0:
-                print(f"    Common satellites: {list(common_sats)[:5]}")
+            print(f"  Only {len(common_sats)} common satellites - skipping")
             continue
         
         # Filter by system
@@ -234,7 +171,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                 filtered_sats.append(sat)
         
         if len(filtered_sats) < 2:
-            print(f"  DEBUG: Common={len(common_sats)}, After filter={len(filtered_sats)}")
             print(f"  Only {len(filtered_sats)} satellites after filtering - skipping")
             continue
         
@@ -253,10 +189,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
         # Compute satellite positions using rover time
         sat_positions, sat_clocks, _, _ = satpos(rover_obs_list, nav_data)
         
-        # Debug satellite position computation
-        valid_positions = sum(1 for pos in sat_positions if pos is not None and not np.any(np.isnan(pos)))
-        print(f"  DEBUG: Computed positions for {valid_positions}/{len(rover_obs_list)} satellites")
-        
         sat_data = {}
         for i, obs in enumerate(rover_obs_list):
             sat = obs.sat
@@ -273,8 +205,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
             elevation = compute_elevation_angle(sat_pos, reference_ecef, reference_llh)
             
             if elevation < cutoff_angle:
-                if i < 3:  # Debug first few satellites
-                    print(f"    DEBUG: Sat {sat} elevation {elevation:.1f}° < {cutoff_angle}° cutoff")
                 continue
             
             # Get base observation for same satellite
@@ -293,9 +223,13 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                     rover_pr_corrected = rover_pr - sat_clk * CLIGHT
                     base_pr_corrected = base_pr - sat_clk * CLIGHT
                     
-                    # 補間後は時刻差がゼロになるため、補正は不要
-                    # RTKLIBスタイルの補間により、基準局観測値は
-                    # 移動局と同じ時刻に補間されている
+                    # Adjust base pseudorange for time difference
+                    # Simple approximation: range rate ~ 800 m/s max for LEO
+                    # For GNSS satellites, max is ~800 m/s radial velocity
+                    # This is a first-order correction
+                    if abs(time_diff) > 0.001:  # Only apply if > 1ms
+                        range_rate_est = 800.0  # m/s, conservative estimate
+                        base_pr_corrected += range_rate_est * time_diff
                     
                     freqs_data.append({
                         'freq_idx': freq_idx,
@@ -335,11 +269,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                 sat_by_system[sys_id] = {}
             sat_by_system[sys_id][sat] = data
         
-        # Debug: Show satellite data collected
-        if len(sat_data) == 0:
-            print(f"  DEBUG: No satellite data collected after elevation/position filtering")
-            print(f"    Filtered sats: {len(filtered_sats)}, Sat data: {len(sat_data)}")
-        
         # Form DD for each system independently
         for sys_id, sys_sats in sat_by_system.items():
             if len(sys_sats) < 2:
@@ -372,10 +301,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                     # Double difference
                     dd = sd_rover - sd_base
                     
-                    # Get system character
-                    sys_map = {SYS_GPS: 'G', SYS_GLO: 'R', SYS_GAL: 'E', SYS_BDS: 'C', SYS_QZS: 'J'}
-                    system_char = sys_map.get(sys_id, 'U')
-                    
                     dd_measurements.append({
                         'sat': sat,
                         'ref_sat': ref_sat,
@@ -386,7 +311,6 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                         'ref_sat_clk': ref_data['sat_clk'],
                         'elevation': data['elevation'],
                         'freq_idx': freq_idx,
-                        'system': system_char,
                         'time': rover_time,
                         'time_diff': time_diff
                     })
@@ -399,50 +323,3 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
         })
     
     return all_dd_measurements
-
-
-def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
-                          reference_ecef, reference_llh,
-                          use_systems=None, cutoff_angle=15.0):
-    """
-    Legacy API for forming double differences - single epoch
-    
-    This wraps the combined implementation for backward compatibility
-    """
-    # Create single-epoch lists
-    rover_epoch = {
-        'gps_time': gps_time,
-        'observations': rover_obs
-    }
-    base_epoch = {
-        'gps_time': gps_time,
-        'observations': base_obs
-    }
-    
-    # Synchronize (should be immediate match for same time)
-    sync_pairs = combine_and_synchronize_observations(
-        [rover_epoch], [base_epoch], max_time_diff=0.5
-    )
-    
-    if not sync_pairs:
-        return []
-    
-    # Form DD
-    dd_results = form_double_differences_combined(
-        sync_pairs, nav_data,
-        reference_ecef, reference_llh,
-        use_systems, cutoff_angle
-    )
-    
-    # Return just the DD measurements for the single epoch
-    if dd_results and dd_results[0]['dd_measurements']:
-        return dd_results[0]['dd_measurements']
-    return []
-
-
-# Keep old synchronize_observations for compatibility  
-def synchronize_observations(rover_obs, base_obs, gps_time, max_tdiff=30.0):
-    """Legacy synchronization function - just returns base_obs if time close enough"""
-    # This is a simplified version for backward compatibility
-    # The real synchronization happens in combine_and_synchronize_observations
-    return base_obs

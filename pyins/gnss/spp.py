@@ -51,9 +51,17 @@ def tropmodel_simple(pos, el):
     h = pos[2] if len(pos) > 2 else 0.0
     if h < 0:
         h = 0.0
+    # Limit height to valid range (max ~44km for this formula)
+    if h > 44330:
+        h = 44330
 
     # Pressure and temperature at height
-    P = P0 * (1 - 2.26e-5 * h) ** 5.225
+    # Ensure the base is positive before exponentiation
+    base = 1 - 2.26e-5 * h
+    if base <= 0:
+        P = 0.0  # Essentially no atmosphere
+    else:
+        P = P0 * base ** 5.225
     T = T0 - 6.5e-3 * h
     e = e0 * (T / T0) ** 4.0
 
