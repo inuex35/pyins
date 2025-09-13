@@ -230,3 +230,33 @@ def char2sys(c):
         'I': SYS_IRN
     }
     return charmap.get(c.upper(), 0)
+
+# GNSS Frequencies (Hz)
+# GPS
+FREQ_GPS_L1 = 1575.42e6
+FREQ_GPS_L2 = 1227.60e6
+FREQ_GPS_L5 = 1176.45e6
+
+# Galileo
+FREQ_GAL_E1 = 1575.42e6  # Same as GPS L1
+FREQ_GAL_E5a = 1176.45e6  # Same as GPS L5
+FREQ_GAL_E5b = 1207.14e6
+FREQ_GAL_E5 = 1191.795e6  # E5 full bandwidth
+FREQ_GAL_E6 = 1278.75e6
+
+# BeiDou
+FREQ_BDS_B1I = 1561.098e6
+FREQ_BDS_B1C = 1575.42e6  # Same as GPS L1
+FREQ_BDS_B2a = 1176.45e6  # Same as GPS L5
+FREQ_BDS_B2b = 1207.14e6  # Same as Galileo E5b
+FREQ_BDS_B3I = 1268.52e6
+
+# GLONASS (center frequencies, actual frequency depends on channel)
+FREQ_GLO_G1 = 1602.0e6  # + k * 0.5625e6
+FREQ_GLO_G2 = 1246.0e6  # + k * 0.4375e6
+
+# QZSS (same as GPS)
+FREQ_QZS_L1 = FREQ_GPS_L1
+FREQ_QZS_L2 = FREQ_GPS_L2
+FREQ_QZS_L5 = FREQ_GPS_L5
+FREQ_QZS_L6 = 1278.75e6  # LEX signal

@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2024 inuex35
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Double Difference formation with combined base/rover observations for better time matching
 Now includes RTKLIB-style residual interpolation for handling time differences
@@ -14,7 +28,7 @@ from ..gnss.rtklib_interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
 from ..gnss.residual_interpolation import compute_residual, interpolate_residual, compute_residuals_for_epoch
 
 
-def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=0.5, interpolate=True):
+def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=30.0, interpolate=True):
     """
     Combine base and rover observations with RTKLIB-style interpolation
     
@@ -115,6 +129,30 @@ def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time
                     'interpolated': True
                 })
                 print(f"INFO: RTKLIB-interpolated for rover time {rover_time:.1f} (base: {time_before:.1f}-{time_after:.1f})")
+        
+        # Try extrapolation for data beyond last base epoch (only for 0.2Hz base)
+        elif interpolate and base_before is not None and base_after is None:
+            # Extrapolate using last two base epochs if rover is beyond last base
+            if len(base_sorted) >= 2:
+                # Get last two base epochs for extrapolation
+                last_base = base_sorted[-1]
+                second_last_base = base_sorted[-2]
+                last_time = get_time(last_base)
+                second_last_time = get_time(second_last_base)
+                
+                # Only extrapolate if within reasonable range (e.g., 30 seconds)
+                if rover_time - last_time <= 30.0 and last_time - second_last_time <= 10.0:
+                    # Simple hold-last-value extrapolation (safest approach)
+                    synchronized_pairs.append({
+                        'rover_obs': rover_obs,
+                        'base_obs': last_base,  # Use last base observation
+                        'rover_time': rover_time,
+                        'base_time': last_time,
+                        'time_diff': rover_time - last_time,
+                        'interpolated': False,
+                        'extrapolated': True
+                    })
+                    print(f"INFO: Extrapolated for rover time {rover_time:.1f} using last base {last_time:.1f} (diff={rover_time - last_time:.1f}s)")
         
         # Fall back to closest observation
         else:
@@ -223,7 +261,7 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
     
     # Synchronize observations with interpolation support
     sync_pairs = combine_and_synchronize_observations(
-        [rover_epoch], base_epochs, max_time_diff=10.0, interpolate=True
+        [rover_epoch], base_epochs, max_time_diff=30.0, interpolate=True
     )
     
     if not sync_pairs:
@@ -360,10 +398,57 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 # Form double difference
                 dd_obs = sd_rover - sd_base
                 
+                # Also extract carrier phase if available
+                dd_carrier = None
+                wavelength = None
+                
+                # Check carrier phase availability (L attribute)
+                if (hasattr(rover_obs_sat, 'L') and hasattr(base_obs_sat, 'L') and 
+                    hasattr(ref_rover_obs, 'L') and hasattr(ref_base_obs, 'L')):
+                    
+                    # Check if all have enough frequencies
+                    if (len(rover_obs_sat.L) > freq_idx and len(base_obs_sat.L) > freq_idx and
+                        len(ref_rover_obs.L) > freq_idx and len(ref_base_obs.L) > freq_idx):
+                        
+                        # Extract carrier phase measurements (in cycles)
+                        rover_cp = rover_obs_sat.L[freq_idx] if rover_obs_sat.L[freq_idx] != 0 else None
+                        base_cp = base_obs_sat.L[freq_idx] if base_obs_sat.L[freq_idx] != 0 else None
+                        ref_rover_cp = ref_rover_obs.L[freq_idx] if ref_rover_obs.L[freq_idx] != 0 else None
+                        ref_base_cp = ref_base_obs.L[freq_idx] if ref_base_obs.L[freq_idx] != 0 else None
+                        
+                        if None not in [rover_cp, base_cp, ref_rover_cp, ref_base_cp]:
+                            # Form DD carrier phase
+                            sd_rover_cp = rover_cp - ref_rover_cp
+                            sd_base_cp = base_cp - ref_base_cp
+                            dd_carrier = sd_rover_cp - sd_base_cp
+                            
+                            # Get wavelength based on frequency and system
+                            from ..core.constants import FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L5
+                            from ..core.constants import FREQ_GAL_E1, FREQ_GAL_E5a, FREQ_GAL_E5b
+                            from ..core.constants import FREQ_BDS_B1I, FREQ_BDS_B3I
+                            
+                            # Determine frequency based on system and freq_idx
+                            sys_char = sys_map.get(sat2sys(sat), 'U')
+                            freq = None
+                            
+                            if sys_char == 'G':  # GPS
+                                freq = [FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L5][freq_idx] if freq_idx < 3 else None
+                            elif sys_char == 'E':  # Galileo
+                                freq = [FREQ_GAL_E1, FREQ_GAL_E5a, FREQ_GAL_E5b][freq_idx] if freq_idx < 3 else None
+                            elif sys_char == 'C':  # BeiDou
+                                freq = [FREQ_BDS_B1I, FREQ_BDS_B3I][freq_idx] if freq_idx < 2 else None
+                            elif sys_char == 'J':  # QZSS (same as GPS)
+                                freq = [FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L5][freq_idx] if freq_idx < 3 else None
+                            
+                            if freq:
+                                wavelength = CLIGHT / freq
+                
                 dd_measurements.append({
                     'sat': sat,
                     'ref_sat': ref_sat,
                     'dd_obs': dd_obs,
+                    'dd_carrier': dd_carrier,  # DD carrier phase in cycles
+                    'wavelength': wavelength,   # Wavelength in meters
                     'sat_pos': data['pos'],
                     'ref_sat_pos': ref_data['pos'],
                     'sat_clk': data['clk'],
