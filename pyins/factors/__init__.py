@@ -3,12 +3,12 @@
 # DD factors
 from .dd_pseudorange_factor import DDPseudorangeFactor
 from .dd_carrier_phase_factor import DDCarrierPhaseFactor, DDCarrierPhaseFactorFixed
-from .dd_pseudorange_factor_pose import DDPseudorangeFactorPose
-from .dd_carrier_phase_factor_pose import DDCarrierPhaseFactorPose
+from .dd_pseudorange_factor_pose import DDPseudorangePoseFactor
+from .dd_carrier_phase_factor_pose import DDCarrierPhasePoseFactor
 
 # Single point factors
 from .pseudorange_factor import PseudorangePoseFactor, PseudorangeWithISBPoseFactor
-from .pseudorange_factor_pose import PseudorangePoseFactorNew
+# Note: pseudorange_factor_pose.py also has classes with same names, importing separately if needed
 
 # Double difference 
 from .double_difference_factor import DoubleDifferencePoseFactor
@@ -23,8 +23,8 @@ from .fix_and_hold_factor import FixAndHoldFactor
 
 __all__ = [
     'DDPseudorangeFactor', 'DDCarrierPhaseFactor', 'DDCarrierPhaseFactorFixed',
-    'DDPseudorangeFactorPose', 'DDCarrierPhaseFactorPose',
-    'PseudorangePoseFactor', 'PseudorangeWithISBPoseFactor', 'PseudorangePoseFactorNew',
+    'DDPseudorangePoseFactor', 'DDCarrierPhasePoseFactor',
+    'PseudorangePoseFactor', 'PseudorangeWithISBPoseFactor',
     'DoubleDifferencePoseFactor',
     'IMUFactorBuilder',
     'VelocityFactor', 'ClockBetweenFactor', 'FixAndHoldFactor'

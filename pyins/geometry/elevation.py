@@ -33,9 +33,10 @@ def compute_elevation_angle(sat_pos: np.ndarray, rcv_pos: np.ndarray, reference_
         reference_llh[2]                # height in meters
     ])
     
-    # ecef2enu expects the satellite position, not the LOS vector
+    # ecef2enu expects the vector from receiver to satellite
     # and the reference LLH in radians
-    enu = ecef2enu(sat_pos, reference_llh_rad)
+    los_vector = sat_pos - rcv_pos
+    enu = ecef2enu(los_vector, reference_llh_rad)
     
     # Compute elevation angle
     horizontal = np.sqrt(enu[0]**2 + enu[1]**2)

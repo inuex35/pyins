@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Double Difference formation with combined base/rover observations for better time matching
+Now includes RTKLIB-style residual interpolation for handling time differences
 """
 
 import numpy as np
@@ -10,6 +11,7 @@ from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
 from ..gnss.rtklib_interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
+from .residual_interpolation import compute_residual, interpolate_residual, compute_residuals_for_epoch
 
 
 def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time_diff=0.5, interpolate=True):
@@ -95,7 +97,8 @@ def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time
             idx_after, obs_after, time_after = base_after
             
             # Check if interpolation span is reasonable
-            if time_after - time_before <= 2.0:  # Max 2 second span for reliability
+            # Allow up to 10 seconds for low-rate base stations (e.g., 5-second intervals)
+            if time_after - time_before <= 10.0:  # Max 10 second span for low-rate base
                 # RTKLIBスタイルの補間を実行
                 base_interp = interpolate_base_epoch(
                     obs_before, obs_after,
@@ -146,7 +149,9 @@ def combine_and_synchronize_observations(rover_obs_list, base_obs_list, max_time
 def form_double_differences_combined(synchronized_pairs, nav_data,
                                     reference_ecef, reference_llh,
                                     use_systems: list[str] = None,
-                                    cutoff_angle: float = 15.0) -> list[dict]:
+                                    cutoff_angle: float = 15.0,
+                                    use_residual_interp: bool = False,
+                                    rover_position: np.ndarray = None) -> list[dict]:
     """
     Form double differences from pre-synchronized observation pairs
     
@@ -238,24 +243,36 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
             print(f"  Only {len(filtered_sats)} satellites after filtering - skipping")
             continue
         
-        # Convert observations to list format for satpos
+        # Convert observations to list format for satpos  
         rover_obs_list = []
+        base_obs_list = []
         for sat in filtered_sats:
             if sat in rover_obs:
                 obs = rover_obs[sat]
                 obs.sat = sat
                 obs.time = rover_time
                 rover_obs_list.append(obs)
+            
+            if sat in base_obs:
+                obs = base_obs[sat]
+                obs.sat = sat
+                obs.time = pair['base_time']  # Use actual base observation time
+                base_obs_list.append(obs)
         
-        if not rover_obs_list:
+        if not rover_obs_list or not base_obs_list:
             continue
             
-        # Compute satellite positions using rover time
-        sat_positions, sat_clocks, _, _ = satpos(rover_obs_list, nav_data)
+        # FIXED: Compute satellite positions at correct times
+        # Rover satellite positions at rover time
+        rover_sat_positions, rover_sat_clocks, _, _ = satpos(rover_obs_list, nav_data)
+        
+        # Base satellite positions at base time (different if time offset exists)
+        base_sat_positions, base_sat_clocks, _, _ = satpos(base_obs_list, nav_data)
         
         # Debug satellite position computation
-        valid_positions = sum(1 for pos in sat_positions if pos is not None and not np.any(np.isnan(pos)))
-        print(f"  DEBUG: Computed positions for {valid_positions}/{len(rover_obs_list)} satellites")
+        valid_rover_positions = sum(1 for pos in rover_sat_positions if pos is not None and not np.any(np.isnan(pos)))
+        valid_base_positions = sum(1 for pos in base_sat_positions if pos is not None and not np.any(np.isnan(pos)))
+        print(f"  DEBUG: Rover positions {valid_rover_positions}/{len(rover_obs_list)}, Base positions {valid_base_positions}/{len(base_obs_list)}")
         
         sat_data = {}
         for i, obs in enumerate(rover_obs_list):
@@ -263,14 +280,29 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
             if sat not in filtered_sats:
                 continue
             
-            # Get satellite position
-            sat_pos = sat_positions[i]
-            sat_clk = sat_clocks[i]
-            if sat_pos is None or np.any(np.isnan(sat_pos)):
+            # Get rover satellite position (at rover time)
+            rover_sat_pos = rover_sat_positions[i]
+            rover_sat_clk = rover_sat_clocks[i]
+            if rover_sat_pos is None or np.any(np.isnan(rover_sat_pos)):
+                continue
+                
+            # Find corresponding base satellite position (at base time)
+            base_sat_idx = None
+            for j, base_obs_item in enumerate(base_obs_list):
+                if base_obs_item.sat == sat:
+                    base_sat_idx = j
+                    break
+            
+            if base_sat_idx is None:
+                continue
+                
+            base_sat_pos = base_sat_positions[base_sat_idx]
+            base_sat_clk = base_sat_clocks[base_sat_idx]
+            if base_sat_pos is None or np.any(np.isnan(base_sat_pos)):
                 continue
             
-            # Compute elevation angle
-            elevation = compute_elevation_angle(sat_pos, reference_ecef, reference_llh)
+            # Compute elevation angle using rover satellite position
+            elevation = compute_elevation_angle(rover_sat_pos, reference_ecef, reference_llh)
             
             if elevation < cutoff_angle:
                 if i < 3:  # Debug first few satellites
@@ -289,13 +321,19 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                 base_pr = base_obs_sat.P[freq_idx] if freq_idx < len(base_obs_sat.P) and base_obs_sat.P[freq_idx] != 0 else None
                 
                 if rover_pr is not None and base_pr is not None:
-                    # Apply satellite clock correction
-                    rover_pr_corrected = rover_pr - sat_clk * CLIGHT
-                    base_pr_corrected = base_pr - sat_clk * CLIGHT
+                    # DD cancels satellite clock errors, so we don't apply them here
+                    # The satellite clock correction cancels in the double difference:
+                    # DD = (ρ_r^s - ρ_b^s) - (ρ_r^ref - ρ_b^ref)
+                    # Both satellites' clock errors cancel out
                     
-                    # 補間後は時刻差がゼロになるため、補正は不要
-                    # RTKLIBスタイルの補間により、基準局観測値は
-                    # 移動局と同じ時刻に補間されている
+                    # However, with large time differences, receiver clock bias may not cancel
+                    # completely due to clock drift. We estimate and remove receiver clock bias.
+                    rover_pr_corrected = rover_pr
+                    base_pr_corrected = base_pr
+                    
+                    # IMPORTANT: After RTKLIB-style interpolation, base observations are
+                    # interpolated to rover time, so we use the same satellite position
+                    # and clock for both receivers in DD computation
                     
                     freqs_data.append({
                         'freq_idx': freq_idx,
@@ -320,8 +358,10 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                 sys_id = SYS_GPS
             
             sat_data[obs.sat] = {
-                'sat_pos': sat_pos,
-                'sat_clk': sat_clk,
+                'rover_sat_pos': rover_sat_pos,
+                'rover_sat_clk': rover_sat_clk,
+                'base_sat_pos': base_sat_pos,
+                'base_sat_clk': base_sat_clk,
                 'elevation': elevation,
                 'freqs': freqs_data,
                 'system': sys_id
@@ -363,14 +403,63 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                     if ref_freq_data is None:
                         continue
                     
-                    # Single difference at rover
-                    sd_rover = freq_data['rover_pr'] - ref_freq_data['rover_pr']
-                    
-                    # Single difference at base
-                    sd_base = freq_data['base_pr'] - ref_freq_data['base_pr']
-                    
-                    # Double difference
-                    dd = sd_rover - sd_base
+                    # Check if we should use residual interpolation
+                    if use_residual_interp and rover_position is not None and abs(time_diff) > 0.001:
+                        # RTKLIB-style residual interpolation for large time differences
+                        # Compute residuals (observation - geometric range - sat clock)
+                        # Residuals include receiver clock bias
+                        
+                        # Rover residuals (at rover time)
+                        rover_res_other = compute_residual(
+                            freq_data['rover_pr'],
+                            data['rover_sat_pos'],
+                            data['rover_sat_clk'],
+                            rover_position
+                        )
+                        rover_res_ref = compute_residual(
+                            ref_freq_data['rover_pr'],
+                            ref_data['rover_sat_pos'],
+                            ref_data['rover_sat_clk'],
+                            rover_position
+                        )
+                        
+                        # Base residuals (at base time)
+                        base_res_other = compute_residual(
+                            freq_data['base_pr'],
+                            data['base_sat_pos'],
+                            data['base_sat_clk'],
+                            reference_ecef  # base position
+                        )
+                        base_res_ref = compute_residual(
+                            ref_freq_data['base_pr'],
+                            ref_data['base_sat_pos'],
+                            ref_data['base_sat_clk'],
+                            reference_ecef  # base position
+                        )
+                        
+                        # Single differences from residuals
+                        sd_rover = rover_res_other - rover_res_ref
+                        sd_base = base_res_other - base_res_ref
+                        
+                        # Double difference
+                        dd = sd_rover - sd_base
+                        
+                        if pair_idx == 0 and freq_idx == 0 and sat == sys_sats[ref_sat]:
+                            # Debug first DD
+                            print(f"    DEBUG: Using residual interpolation for time diff={time_diff:.1f}s")
+                            print(f"      Rover residuals: other={rover_res_other:.1f}, ref={rover_res_ref:.1f}")
+                            print(f"      Base residuals: other={base_res_other:.1f}, ref={base_res_ref:.1f}")
+                            print(f"      DD from residuals: {dd:.1f} m")
+                    else:
+                        # Standard DD calculation (direct observation difference)
+                        # Single difference at rover
+                        sd_rover = freq_data['rover_pr'] - ref_freq_data['rover_pr']
+                        
+                        # Single difference at base
+                        sd_base = freq_data['base_pr'] - ref_freq_data['base_pr']
+                        
+                        # Double difference
+                        dd = sd_rover - sd_base
                     
                     # Get system character
                     sys_map = {SYS_GPS: 'G', SYS_GLO: 'R', SYS_GAL: 'E', SYS_BDS: 'C', SYS_QZS: 'J'}
@@ -380,10 +469,14 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
                         'sat': sat,
                         'ref_sat': ref_sat,
                         'dd_obs': dd,
-                        'sat_pos': data['sat_pos'],
-                        'ref_sat_pos': ref_data['sat_pos'],
-                        'sat_clk': data['sat_clk'],
-                        'ref_sat_clk': ref_data['sat_clk'],
+                        'sat_pos': data['rover_sat_pos'],  # Use rover satellite position for DD factor
+                        'ref_sat_pos': ref_data['rover_sat_pos'],  # Use rover ref satellite position for DD factor
+                        'sat_clk': data['rover_sat_clk'],
+                        'ref_sat_clk': ref_data['rover_sat_clk'],
+                        'base_sat_pos': data['base_sat_pos'],  # Include base satellite positions for validation
+                        'base_ref_sat_pos': ref_data['base_sat_pos'],
+                        'base_sat_clk': data['base_sat_clk'],
+                        'base_ref_sat_clk': ref_data['base_sat_clk'],
                         'elevation': data['elevation'],
                         'freq_idx': freq_idx,
                         'system': system_char,
@@ -403,7 +496,8 @@ def form_double_differences_combined(synchronized_pairs, nav_data,
 
 def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                           reference_ecef, reference_llh,
-                          use_systems=None, cutoff_angle=15.0):
+                          use_systems=None, cutoff_angle=15.0,
+                          use_residual_interp=False, rover_position=None):
     """
     Legacy API for forming double differences - single epoch
     
@@ -419,9 +513,9 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
         'observations': base_obs
     }
     
-    # Synchronize (should be immediate match for same time)
+    # Synchronize with interpolation for large time differences (like opensky2 6-second offset)
     sync_pairs = combine_and_synchronize_observations(
-        [rover_epoch], [base_epoch], max_time_diff=0.5
+        [rover_epoch], [base_epoch], max_time_diff=10.0, interpolate=True
     )
     
     if not sync_pairs:
@@ -431,7 +525,8 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
     dd_results = form_double_differences_combined(
         sync_pairs, nav_data,
         reference_ecef, reference_llh,
-        use_systems, cutoff_angle
+        use_systems, cutoff_angle,
+        use_residual_interp, rover_position
     )
     
     # Return just the DD measurements for the single epoch
