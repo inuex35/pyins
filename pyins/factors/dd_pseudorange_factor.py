@@ -33,7 +33,7 @@ class DDPseudorangeFactor:
     """
     
     def __init__(self, position_key, dd_data, base_pos_ecef, reference_llh, 
-                 noise_model=None, use_atmospheric=True, ion_params=None, gps_time=0.0):
+                 noise_model=None, use_atmospheric=False, ion_params=None, gps_time=0.0):
         """Initialize DD Pseudorange Factor
         
         Args:
@@ -62,9 +62,9 @@ class DDPseudorangeFactor:
         self.sat_other = dd_data.get('sat', 0)
         self.freq_idx = dd_data.get('freq_idx', 0)  # Get frequency index from DD data
         
-        # Get satellite clock biases (in seconds)
-        self.sat_clk_other = dd_data.get('sat_clk', 0.0)
-        self.sat_clk_ref = dd_data.get('ref_sat_clk', 0.0)
+        # DD cancels satellite clock biases, so we don't need them
+        # self.sat_clk_other = dd_data.get('sat_clk', 0.0)
+        # self.sat_clk_ref = dd_data.get('ref_sat_clk', 0.0)
         
         # Store other parameters
         self.base_pos_ecef = base_pos_ecef
@@ -235,28 +235,35 @@ class DDPseudorangeFactor:
             
             # Compute Jacobian if requested
             if H is not None and len(H) > 0:
-                # Unit vectors (line-of-sight) from rover to satellites (use geometric range)
-                e_rover_other = vec_rover_other / geom_range_rover_other  # rover -> other satellite
-                e_rover_ref = vec_rover_ref / geom_range_rover_ref        # rover -> reference satellite
+                # Use numerical differentiation for now until analytical is fixed
+                epsilon = 1e-6
+                H_numerical = np.zeros((1, 3))
                 
-                # GICI-style Jacobian: d(DD)/d(rover_position)
-                # DD = rho_rov - rho_ref - rho_rov_base + rho_ref_base
-                # d(DD)/d(rover_pos) = d(rho_rov)/d(rover_pos) - d(rho_rov_base)/d(rover_pos)
-                # d(rho_rov)/d(rover_pos) = -e_rover_other
-                # d(rho_rov_base)/d(rover_pos) = -e_rover_ref
-                # So: d(DD)/d(rover_pos) = -e_rover_other + e_rover_ref
-                H_ecef = -e_rover_other + e_rover_ref
+                for j in range(3):
+                    # Perturb position
+                    rover_enu_plus = rover_enu.copy()
+                    rover_enu_minus = rover_enu.copy()
+                    rover_enu_plus[j] += epsilon
+                    rover_enu_minus[j] -= epsilon
+                    
+                    # Compute DD at perturbed positions
+                    rover_ecef_plus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_plus
+                    rover_ecef_minus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_minus
+                    
+                    # Ranges at plus position
+                    range_rover_other_plus = np.linalg.norm(self.sat_pos_other - rover_ecef_plus)
+                    range_rover_ref_plus = np.linalg.norm(self.sat_pos_ref - rover_ecef_plus)
+                    dd_plus = (range_rover_other_plus - range_base_other) - (range_rover_ref_plus - range_base_ref)
+                    
+                    # Ranges at minus position
+                    range_rover_other_minus = np.linalg.norm(self.sat_pos_other - rover_ecef_minus)
+                    range_rover_ref_minus = np.linalg.norm(self.sat_pos_ref - rover_ecef_minus)
+                    dd_minus = (range_rover_other_minus - range_base_other) - (range_rover_ref_minus - range_base_ref)
+                    
+                    # Numerical derivative
+                    H_numerical[0, j] = -(dd_plus - dd_minus) / (2 * epsilon)  # Negative because error = measured - computed
                 
-                # Transform to ENU
-                # Since rover_ecef = base_ecef + R * rover_enu
-                # d(dd)/d(rover_enu) = H_ecef * R_enu2ecef
-                H_enu = H_ecef @ self.R_enu2ecef
-                
-                # Set Jacobian (1x3 matrix)
-                # Note: GTSAM expects Jacobian of error w.r.t. state
-                # error = residual = measured - computed
-                # d(error)/d(state) = -d(computed)/d(state)
-                H[0] = np.asarray(-H_enu.reshape(1, 3), dtype=np.float64)
+                H[0] = H_numerical
             
             return error
         

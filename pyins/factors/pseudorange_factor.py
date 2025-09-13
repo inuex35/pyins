@@ -6,7 +6,8 @@ from typing import List, Optional
 from pyins.coordinate.dcm import enu2ecef_dcm
 from pyins.coordinate.transforms import enu2ecef, ecef2llh
 from pyins.core.constants import CLIGHT, sat2prn
-from pyins.gnss.spp import robust_troposphere_model, elevation_angle
+from pyins.gnss.spp import tropmodel_simple as robust_troposphere_model
+from pyins.gnss.spp import satazel
 
 
 class PseudorangeFactor:
