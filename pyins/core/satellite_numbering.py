@@ -12,7 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified satellite numbering system for pyins"""
+"""Unified satellite numbering system for pyins.
+
+This module provides consistent satellite numbering across all GNSS constellations,
+converting between PRN numbers and internal satellite numbers. The unified numbering
+system simplifies satellite identification and avoids conflicts between different
+constellation numbering schemes.
+
+The satellite number ranges are:
+- GPS (G): 1-32
+- SBAS (S): 33-64, 133-140
+- GLONASS (R): 65-88
+- Galileo (E): 97-132
+- BeiDou (C): 141-203
+- QZSS (J): 210-216
+- IRNSS (I): 230-243
+"""
 
 # Define system IDs (duplicated from constants.py to avoid circular import)
 SYS_NONE = 0x00
@@ -50,34 +65,51 @@ SYS_TO_CHAR = {
 CHAR_TO_SYS = {v: k for k, v in SYS_TO_CHAR.items()}
 
 def prn_to_sat(system_char, prn):
-    """
-    Convert system character and PRN to internal satellite number
+    """Convert system character and PRN to internal satellite number.
+
+    Transforms constellation-specific PRN numbers into a unified internal satellite
+    numbering scheme that avoids conflicts between different GNSS systems.
 
     Parameters
     ----------
     system_char : str
-        Single character system identifier ('G', 'R', 'E', 'C', 'J', etc.)
+        Single character system identifier:
+        - 'G': GPS
+        - 'R': GLONASS
+        - 'E': Galileo
+        - 'C': BeiDou
+        - 'J': QZSS
+        - 'S': SBAS
+        - 'I': IRNSS/NavIC
     prn : int
-        PRN number
+        PRN number within the constellation (constellation-specific range)
 
     Returns
     -------
     int
-        Internal satellite number, or 0 if invalid
+        Internal satellite number (1-255), or 0 if invalid PRN or system
 
-    Satellite number ranges:
-    - GPS (G): 1-32 -> 1-32
-    - SBAS (S): 33-64 -> 33-64
-    - GLONASS (R): 1-24 -> 65-88
-    - Reserved: 89-96
-    - Galileo (E): 1-36 -> 97-132
-    - SBAS (S): 133-140 -> 133-140
-    - BeiDou-2 (C): 1-37 -> 141-177
-    - BeiDou-3 (C): 38-63 -> 178-203
-    - Reserved: 204-209
-    - QZSS (J): 1-7 -> 210-216
-    - Reserved: 200
-    - IRNSS (I): 1-14 -> 201-214
+    Notes
+    -----
+    The internal satellite number ranges are:
+    - GPS (G): PRN 1-32 → sat 1-32
+    - SBAS (S): PRN 120-151 → sat 33-64, PRN 152-159 → sat 133-140
+    - GLONASS (R): PRN 1-24 → sat 65-88
+    - Galileo (E): PRN 1-36 → sat 97-132
+    - BeiDou (C): PRN 1-63 → sat 141-203 (BDS-2: 1-37, BDS-3: 38-63)
+    - QZSS (J): PRN 1-7 → sat 210-216
+    - IRNSS (I): PRN 1-14 → sat 230-243
+
+    Examples
+    --------
+    >>> prn_to_sat('G', 1)  # GPS PRN 1
+    1
+    >>> prn_to_sat('R', 1)  # GLONASS PRN 1
+    65
+    >>> prn_to_sat('E', 1)  # Galileo PRN 1
+    97
+    >>> prn_to_sat('X', 1)  # Invalid system
+    0
     """
     if system_char == 'G':  # GPS
         if 1 <= prn <= 32:
@@ -109,18 +141,42 @@ def prn_to_sat(system_char, prn):
 
 
 def sat_to_prn(sat):
-    """
-    Convert internal satellite number to PRN
+    """Convert internal satellite number to constellation-specific PRN.
+
+    Transforms unified internal satellite numbers back to the original PRN
+    numbers used within each GNSS constellation.
 
     Parameters
     ----------
     sat : int
-        Internal satellite number
+        Internal satellite number (1-255)
 
     Returns
     -------
     int
-        PRN number, or 0 if invalid
+        PRN number within the constellation, or 0 if invalid satellite number
+
+    Notes
+    -----
+    The conversion follows these mappings:
+    - GPS: sat 1-32 → PRN 1-32
+    - SBAS: sat 33-64 → PRN 120-151, sat 133-140 → PRN 152-159
+    - GLONASS: sat 65-88 → PRN 1-24
+    - Galileo: sat 97-132 → PRN 1-36
+    - BeiDou: sat 141-203 → PRN 1-63
+    - QZSS: sat 210-216 → PRN 1-7
+    - IRNSS: sat 230-243 → PRN 1-14
+
+    Examples
+    --------
+    >>> sat_to_prn(1)    # GPS satellite 1
+    1
+    >>> sat_to_prn(65)   # GLONASS satellite 65
+    1
+    >>> sat_to_prn(97)   # Galileo satellite 97
+    1
+    >>> sat_to_prn(999)  # Invalid satellite
+    0
     """
     if sat <= 0 or sat > 255:
         return 0

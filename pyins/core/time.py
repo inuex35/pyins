@@ -21,24 +21,67 @@ from .constants import BDT0, GPST0, GST0
 
 
 class GNSSTime:
-    """GNSS Time representation and conversion with type safety
+    """GNSS Time representation and conversion with type safety.
 
-    This class ensures that time systems are not accidentally mixed.
-    All arithmetic operations check for compatible time systems.
+    This class provides a unified interface for handling different GNSS time systems
+    (GPS, Galileo, BeiDou, GLONASS, UTC) with automatic type checking to prevent
+    accidental mixing of incompatible time systems during calculations.
+
+    Attributes
+    ----------
+    week : int
+        Week number since the time system epoch
+    tow : float
+        Time of week in seconds (0 ≤ tow < 604800)
+    time_sys : str
+        Time system identifier ('GPS', 'GAL', 'BDS', 'GLO', 'UTC')
+
+    Notes
+    -----
+    Time system epochs:
+    - GPS: 1980-01-06 00:00:00 UTC
+    - Galileo (GAL): 1999-08-22 00:00:00 UTC
+    - BeiDou (BDS): 2006-01-01 00:00:00 UTC
+
+    All arithmetic operations verify time system compatibility and will raise
+    ValueError if attempting to mix different time systems.
+
+    Examples
+    --------
+    >>> # Create GPS time
+    >>> gps_time = GNSSTime(2200, 432000.0, 'GPS')  # Week 2200, Sunday noon
+
+    >>> # Add 1 hour
+    >>> later_time = gps_time + 3600.0
+
+    >>> # Time difference
+    >>> time1 = GNSSTime(2200, 0.0, 'GPS')
+    >>> time2 = GNSSTime(2200, 3600.0, 'GPS')
+    >>> diff = time2 - time1  # Returns 3600.0 seconds
     """
 
     def __init__(self, week: int = 0, tow: float = 0.0, time_sys: str = 'GPS'):
-        """
-        Initialize GNSS time
+        """Initialize GNSS time with week number and time of week.
 
-        Parameters:
-        -----------
-        week : int
-            Week number
-        tow : float
-            Time of week in seconds
-        time_sys : str
-            Time system ('GPS', 'GAL', 'BDS', 'GLO', 'UTC')
+        Parameters
+        ----------
+        week : int, optional
+            Week number since the time system epoch, default 0
+        tow : float, optional
+            Time of week in seconds, default 0.0
+        time_sys : str, optional
+            Time system identifier, default 'GPS'
+            Valid values: 'GPS', 'GAL', 'BDS', 'GLO', 'UTC'
+
+        Raises
+        ------
+        ValueError
+            If time_sys is not one of the valid time systems
+
+        Notes
+        -----
+        The time of week (tow) is automatically normalized to [0, 604800) seconds
+        with appropriate week adjustments for values outside this range.
         """
         self.week = int(week)
         self.tow = float(tow)
@@ -59,7 +102,25 @@ class GNSSTime:
 
     @classmethod
     def from_datetime(cls, dt, time_sys='GPS'):
-        """Create GNSSTime from datetime object"""
+        """Create GNSSTime from datetime object.
+
+        Parameters
+        ----------
+        dt : datetime.datetime
+            Python datetime object (assumed UTC)
+        time_sys : str, optional
+            Target time system, default 'GPS'
+
+        Returns
+        -------
+        GNSSTime
+            New GNSSTime instance
+
+        Notes
+        -----
+        The datetime is assumed to be in UTC and is converted to the
+        specified time system using the appropriate epoch reference.
+        """
         if time_sys == 'GPS':
             ref_date = datetime(*GPST0)
         elif time_sys == 'GAL':
@@ -77,7 +138,20 @@ class GNSSTime:
 
     @classmethod
     def from_gps_seconds(cls, gps_seconds, time_sys='GPS'):
-        """Create GNSSTime from GPS seconds since GPS epoch"""
+        """Create GNSSTime from GPS seconds since GPS epoch.
+
+        Parameters
+        ----------
+        gps_seconds : float
+            Seconds since GPS epoch (1980-01-06)
+        time_sys : str, optional
+            Target time system, default 'GPS'
+
+        Returns
+        -------
+        GNSSTime
+            New GNSSTime instance
+        """
         week = int(gps_seconds // 604800)
         tow = gps_seconds % 604800
         return cls(week, tow, time_sys)

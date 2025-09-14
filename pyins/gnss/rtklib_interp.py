@@ -26,6 +26,8 @@ DTTOL = 0.005  # 5ms: 厳密な時刻同期許容値（高レート用）
 DTTOL_LOWRATE = 0.025  # 25ms: 低レート（1Hz）用の許容値
 MAXDTOE = 7200.0  # 最大軌道情報時刻差
 FREQ_L1 = 1.57542e9  # L1周波数 (Hz)
+FREQ_L2 = 1.22760e9  # L2周波数 (Hz)
+FREQ_L5 = 1.17645e9  # L5周波数 (Hz)
 CLIGHT = 299792458.0  # 光速 (m/s)
 WAVELENGTH_L1 = CLIGHT / FREQ_L1  # L1波長
 
@@ -78,12 +80,12 @@ def interp_pseudorange(pr1: float, pr2: float, t1: float, t2: float, t: float) -
     return pr_interp
 
 
-def interp_carrier_phase(L1: float, L2: float, D1: float, D2: float, 
+def interp_carrier_phase(L1: float, L2: float, D1: float, D2: float,
                         t1: float, t2: float, t: float, freq: float = FREQ_L1) -> float:
     """
     搬送波位相の補間（ドップラー周波数を使用）
     RTKLIBのinterpobs関数を模倣
-    
+
     Parameters:
     -----------
     L1, L2 : float
@@ -96,29 +98,48 @@ def interp_carrier_phase(L1: float, L2: float, D1: float, D2: float,
         補間対象時刻 [s]
     freq : float
         搬送波周波数 [Hz]
-    
+
     Returns:
     --------
     float : 補間された搬送波位相 [cycle]
     """
     if abs(t2 - t1) < 1e-9 or L1 == 0 or L2 == 0:
         return L1
-    
+
     dt = t - t1
     dt_total = t2 - t1
-    
-    # ドップラーから位相変化率を計算
-    # ドップラー周波数 [Hz] = -範囲率 [m/s] / 波長 [m]
+
+    # RTKLIBアプローチ: ドップラーを使った補間
+    # ドップラー周波数から位相変化を推定
     if D1 != 0 and D2 != 0:
-        # ドップラーの変化率（加速度に相当）
-        dD = (D2 - D1) / dt_total
-        
-        # 2次の項まで考慮した補間（RTKLIBスタイル）
-        L_interp = L1 + D1 * dt / (CLIGHT / freq) + 0.5 * dD * dt * dt / (CLIGHT / freq)
+        # 平均ドップラーを使用（より安定）
+        D_avg = (D1 + D2) / 2.0
+
+        # 波長 = c / freq
+        wavelength = CLIGHT / freq
+
+        # ドップラーによる位相変化 [cycles]
+        # Doppler [Hz] * time [s] = phase change [cycles]
+        phase_change = D_avg * dt
+
+        # 補間された位相
+        L_interp = L1 + phase_change
     else:
         # ドップラーが利用できない場合は線形補間
+        # ただし、位相のジャンプに注意
+        delta_L = L2 - L1
+
+        # 大きなジャンプ（サイクルスリップの可能性）をチェック
+        if abs(delta_L) > 100:  # 100サイクル以上のジャンプは異常
+            # 補間せずに最も近い観測値を使用
+            if abs(dt) < abs(t2 - t):
+                return L1
+            else:
+                return L2
+
+        # 正常な場合は線形補間
         L_interp = L1 + (L2 - L1) * dt / dt_total
-    
+
     return L_interp
 
 
@@ -158,19 +179,33 @@ def interp_observation(obs1: dict, obs2: dict, t1: float, t2: float, t: float) -
                 P_interp.append(0.0)
         obs_interp['P'] = np.array(P_interp)
     
-    # 搬送波位相の補間（ドップラーを使用）
-    if hasattr(obs1, 'L') and hasattr(obs2, 'L') and hasattr(obs1, 'D') and hasattr(obs2, 'D'):
+    # 搬送波位相の補間（ドップラーを使用、より慎重に）
+    if hasattr(obs1, 'L') and hasattr(obs2, 'L'):
         L_interp = []
         for i in range(min(len(obs1.L), len(obs2.L))):
             if obs1.L[i] != 0 and obs2.L[i] != 0:
-                if i < len(obs1.D) and i < len(obs2.D):
-                    L = interp_carrier_phase(obs1.L[i], obs2.L[i], 
-                                           obs1.D[i], obs2.D[i], 
-                                           t1, t2, t)
+                # ドップラーが利用可能な場合
+                if hasattr(obs1, 'D') and hasattr(obs2, 'D') and \
+                   i < len(obs1.D) and i < len(obs2.D) and \
+                   obs1.D[i] != 0 and obs2.D[i] != 0:
+                    # 周波数を決定（L1, L2, L5など）
+                    if i == 0:
+                        freq = FREQ_L1
+                    elif i == 1:
+                        freq = FREQ_L2
+                    else:
+                        freq = FREQ_L5
+
+                    L = interp_carrier_phase(obs1.L[i], obs2.L[i],
+                                           obs1.D[i], obs2.D[i],
+                                           t1, t2, t, freq)
                 else:
-                    # ドップラーがない場合は線形補間
-                    alpha = (t - t1) / (t2 - t1)
-                    L = obs1.L[i] + alpha * (obs2.L[i] - obs1.L[i])
+                    # ドップラーがない場合は最も近い観測値を使用（補間しない）
+                    # これによりキャリアフェーズのジャンプを防ぐ
+                    if abs(t - t1) < abs(t - t2):
+                        L = obs1.L[i]
+                    else:
+                        L = obs2.L[i]
                 L_interp.append(L)
             else:
                 L_interp.append(0.0)

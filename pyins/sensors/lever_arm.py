@@ -20,7 +20,27 @@ import numpy as np
 
 
 class LeverArm:
-    """Lever arm compensation between sensors"""
+    """
+    Lever arm compensation for multi-sensor navigation systems.
+
+    This class provides methods to compensate position, velocity, and acceleration
+    measurements for the lever arm effect - the physical offset between sensors
+    and the body/IMU center.
+
+    Attributes:
+        lever_arm (np.ndarray): 3D lever arm vector from IMU/body center to sensor (meters)
+
+    Notes:
+        The lever arm compensation accounts for the rotational motion of the platform,
+        which causes different sensors to experience different linear motions due to
+        their spatial separation.
+
+    Examples:
+        Basic lever arm setup:
+
+        >>> lever = LeverArm(np.array([0.5, 0.0, 0.1]))  # 50cm forward, 10cm up
+        >>> compensated_pos = lever.compensate_position(body_pos, rotation_matrix)
+    """
 
     def __init__(self, lever_arm: np.ndarray = np.zeros(3)):
         """
@@ -234,30 +254,114 @@ class LeverArm:
 
 
 def skew_symmetric(v: np.ndarray) -> np.ndarray:
-    """Create skew-symmetric matrix from vector"""
+    """
+    Create skew-symmetric matrix from a 3D vector.
+
+    The skew-symmetric matrix is used to represent the cross product operation
+    as a matrix multiplication: skew(v) @ u = v × u
+
+    Parameters:
+    -----------
+    v : np.ndarray
+        3D vector to convert to skew-symmetric matrix
+
+    Returns:
+    --------
+    np.ndarray
+        3x3 skew-symmetric matrix representation of the input vector
+
+    Notes:
+        For vector v = [v1, v2, v3], the skew-symmetric matrix is:
+        [[  0, -v3,  v2],
+         [ v3,   0, -v1],
+         [-v2,  v1,   0]]
+
+    Examples:
+        >>> v = np.array([1, 2, 3])
+        >>> skew_v = skew_symmetric(v)
+        >>> print(skew_v)
+        [[ 0 -3  2]
+         [ 3  0 -1]
+         [-2  1  0]]
+    """
     return np.array([[0, -v[2], v[1]],
                      [v[2], 0, -v[0]],
                      [-v[1], v[0], 0]])
 
 
 class MultiSensorLeverArm:
-    """Manage lever arms for multiple sensors"""
+    """
+    Manage lever arms for multiple sensors in a navigation system.
+
+    This class provides a convenient interface for handling multiple sensors,
+    each with their own lever arm configurations. It allows bulk operations
+    on all registered sensors.
+
+    Attributes:
+        lever_arms (dict): Dictionary mapping sensor IDs to LeverArm objects
+
+    Examples:
+        Multi-sensor setup:
+
+        >>> multi_lever = MultiSensorLeverArm()
+        >>> multi_lever.add_sensor('gnss1', np.array([0.2, 0, 0.3]))
+        >>> multi_lever.add_sensor('gnss2', np.array([-0.2, 0, 0.3]))
+        >>> positions = multi_lever.compensate_all_positions(body_pos, rotation)
+    """
 
     def __init__(self):
         self.lever_arms = {}  # sensor_id -> lever_arm
 
     def add_sensor(self, sensor_id: str, lever_arm: np.ndarray):
-        """Add a sensor with its lever arm"""
+        """
+        Add a sensor with its lever arm configuration.
+
+        Parameters:
+        -----------
+        sensor_id : str
+            Unique identifier for the sensor
+        lever_arm : np.ndarray
+            3D lever arm vector from body center to sensor (meters)
+
+        Notes:
+            If a sensor with the same ID already exists, it will be replaced.
+        """
         self.lever_arms[sensor_id] = LeverArm(lever_arm)
 
     def get_lever_arm(self, sensor_id: str) -> Optional[LeverArm]:
-        """Get lever arm for a specific sensor"""
+        """
+        Get lever arm configuration for a specific sensor.
+
+        Parameters:
+        -----------
+        sensor_id : str
+            Sensor identifier to look up
+
+        Returns:
+        --------
+        Optional[LeverArm]
+            LeverArm object for the sensor, or None if sensor not found
+        """
         return self.lever_arms.get(sensor_id)
 
     def compensate_all_positions(self,
                                 pos_body: np.ndarray,
                                 R_body: np.ndarray) -> dict:
-        """Compensate positions for all sensors"""
+        """
+        Compensate positions for all registered sensors.
+
+        Parameters:
+        -----------
+        pos_body : np.ndarray
+            Position of body/IMU center in navigation frame (3x1)
+        R_body : np.ndarray
+            Rotation matrix from body to navigation frame (3x3)
+
+        Returns:
+        --------
+        dict
+            Dictionary mapping sensor IDs to their compensated positions
+        """
         compensated = {}
         for sensor_id, lever_arm in self.lever_arms.items():
             compensated[sensor_id] = lever_arm.compensate_position(pos_body, R_body)
@@ -267,7 +371,23 @@ class MultiSensorLeverArm:
                                  vel_body: np.ndarray,
                                  omega_body: np.ndarray,
                                  R_body: np.ndarray) -> dict:
-        """Compensate velocities for all sensors"""
+        """
+        Compensate velocities for all registered sensors.
+
+        Parameters:
+        -----------
+        vel_body : np.ndarray
+            Velocity of body/IMU center in navigation frame (3x1)
+        omega_body : np.ndarray
+            Angular velocity in body frame (3x1)
+        R_body : np.ndarray
+            Rotation matrix from body to navigation frame (3x3)
+
+        Returns:
+        --------
+        dict
+            Dictionary mapping sensor IDs to their compensated velocities
+        """
         compensated = {}
         for sensor_id, lever_arm in self.lever_arms.items():
             compensated[sensor_id] = lever_arm.compensate_velocity(

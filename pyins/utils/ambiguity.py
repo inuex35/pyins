@@ -96,7 +96,34 @@ def lambda_search(a_float: np.ndarray, L: np.ndarray, D: np.ndarray,
 
 
 def _ldl_decomposition(A: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """LDL decomposition A = L*D*L'"""
+    """
+    LDL decomposition of a symmetric positive definite matrix.
+
+    Decomposes matrix A into A = L*D*L' where L is lower triangular
+    with unit diagonal and D is diagonal.
+
+    Parameters
+    ----------
+    A : np.ndarray
+        Symmetric positive definite matrix to decompose
+
+    Returns
+    -------
+    L : np.ndarray
+        Lower triangular matrix with unit diagonal
+    D : np.ndarray
+        Diagonal elements as 1D array
+
+    Notes
+    -----
+    This decomposition is numerically more stable than Cholesky
+    decomposition for ill-conditioned matrices and is preferred
+    in the LAMBDA method implementation.
+
+    The algorithm follows the standard LDL decomposition:
+    - D[i] = A[i,i] - sum(L[i,k]^2 * D[k] for k < i)
+    - L[j,i] = (A[j,i] - sum(L[j,k] * L[i,k] * D[k] for k < i)) / D[i]
+    """
     n = A.shape[0]
     L = np.eye(n)
     D = np.zeros(n)
@@ -113,7 +140,42 @@ def _ldl_decomposition(A: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _lll_reduction(L: np.ndarray, D: np.ndarray, Z: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """LLL reduction for improved conditioning"""
+    """
+    LLL (Lenstra-Lenstra-Lovász) reduction for improved conditioning.
+
+    Performs LLL reduction on the LDL decomposition to improve the
+    condition number and reduce the search space for integer solutions.
+
+    Parameters
+    ----------
+    L : np.ndarray
+        Lower triangular matrix from LDL decomposition
+    D : np.ndarray
+        Diagonal elements from LDL decomposition
+    Z : np.ndarray
+        Integer transformation matrix (initially identity)
+
+    Returns
+    -------
+    Z : np.ndarray
+        Updated integer transformation matrix
+    L : np.ndarray
+        Updated lower triangular matrix
+    D : np.ndarray
+        Updated diagonal elements
+
+    Notes
+    -----
+    The LLL algorithm uses two operations:
+    1. Size reduction: Ensures |L[i,j]| ≤ 0.5 for all i > j
+    2. Column swapping: Based on Lovász condition with δ = 0.75
+
+    The Lovász condition is: D[k] ≥ (δ - L[k,k-1]²) * D[k-1]
+    where δ = 0.75 is the standard LLL parameter.
+
+    This reduction significantly improves the efficiency of the
+    subsequent integer search by creating a more orthogonal basis.
+    """
     n = L.shape[0]
     delta = 0.75  # LLL parameter
 
@@ -143,7 +205,39 @@ def _lll_reduction(L: np.ndarray, D: np.ndarray, Z: np.ndarray) -> tuple[np.ndar
 
 
 def _swap_columns(L: np.ndarray, D: np.ndarray, Z: np.ndarray, i: int, j: int):
-    """Swap columns in LDL decomposition"""
+    """
+    Swap columns in LDL decomposition during LLL reduction.
+
+    Performs the column swap operation required by the LLL algorithm
+    while maintaining the LDL decomposition structure.
+
+    Parameters
+    ----------
+    L : np.ndarray
+        Lower triangular matrix (modified in-place)
+    D : np.ndarray
+        Diagonal elements array (modified in-place)
+    Z : np.ndarray
+        Integer transformation matrix (modified in-place)
+    i : int
+        First column index
+    j : int
+        Second column index
+
+    Notes
+    -----
+    This function implements the column swap operation for adjacent
+    columns (i = j-1) in the LDL decomposition. The swap involves:
+    1. Swapping columns in the transformation matrix Z
+    2. Updating the diagonal elements D
+    3. Updating the lower triangular matrix L
+
+    The update formulas ensure that the decomposition A = L*D*L'
+    remains valid after the column permutation.
+
+    For numerical stability, the swap is only performed if the
+    computed delta value is sufficiently large (> 1e-12).
+    """
     n = L.shape[0]
 
     # Swap in Z
@@ -170,7 +264,54 @@ def _search_recursive(a_float: np.ndarray, L: np.ndarray, D: np.ndarray,
                      level: int, chi2: float, a_int: np.ndarray,
                      candidates: list[np.ndarray], residuals: list[float],
                      chi2_max: float, ncands: int, left: np.ndarray, right: np.ndarray):
-    """Recursive integer search"""
+    """
+    Recursive integer search for LAMBDA method.
+
+    Performs a depth-first search through the integer lattice to find
+    the best integer candidates that minimize the quadratic form.
+
+    Parameters
+    ----------
+    a_float : np.ndarray
+        Float ambiguity estimates
+    L : np.ndarray
+        Lower triangular matrix from LDL decomposition
+    D : np.ndarray
+        Diagonal elements from LDL decomposition
+    level : int
+        Current recursion level (0 = start)
+    chi2 : float
+        Accumulated chi-square value
+    a_int : np.ndarray
+        Current integer candidate being constructed
+    candidates : List[np.ndarray]
+        List to store found integer candidates
+    residuals : List[float]
+        List to store residuals for each candidate
+    chi2_max : float
+        Maximum allowed chi-square value
+    ncands : int
+        Maximum number of candidates to keep
+    left : np.ndarray
+        Left bounds for search intervals
+    right : np.ndarray
+        Right bounds for search intervals
+
+    Notes
+    -----
+    This function implements the core integer search of the LAMBDA method:
+    1. Computes conditional mean for current ambiguity
+    2. Determines search bounds based on chi-square constraint
+    3. Recursively searches integer values within bounds
+    4. Maintains list of best candidates found so far
+
+    The search works from the last ambiguity (level n-1) down to the
+    first (level 0), building up the integer solution incrementally.
+
+    The chi-square value tracks the quadratic form:
+    chi2 = (a_int - a_float)' * Q^(-1) * (a_int - a_float)
+    where Q is the ambiguity covariance matrix.
+    """
     n = len(a_float)
 
     if level == n:
@@ -249,7 +390,38 @@ def bootstrap_success_rate(Q: np.ndarray) -> float:
 
 
 def _normal_cdf(x: float) -> float:
-    """Approximation of normal CDF"""
+    """
+    Approximation of the normal cumulative distribution function.
+
+    Uses the Abramowitz and Stegun approximation for computing
+    the CDF of the standard normal distribution.
+
+    Parameters
+    ----------
+    x : float
+        Input value
+
+    Returns
+    -------
+    float
+        Approximate value of Φ(x) = P(Z ≤ x) where Z ~ N(0,1)
+
+    Notes
+    -----
+    This function implements the Abramowitz and Stegun approximation:
+    Φ(x) ≈ 1 - φ(x) * (a1*t + a2*t² + a3*t³ + a4*t⁴ + a5*t⁵)
+    where t = 1/(1 + p*x) and φ(x) is the standard normal PDF.
+
+    The approximation has a maximum error of 7.5 × 10^(-8).
+
+    For negative values, uses the symmetry property:
+    Φ(-x) = 1 - Φ(x)
+
+    References
+    ----------
+    Abramowitz, M. and Stegun, I. A. (1964). Handbook of Mathematical
+    Functions. Dover Publications.
+    """
     # Abramowitz and Stegun approximation
     if x < 0:
         return 1 - _normal_cdf(-x)

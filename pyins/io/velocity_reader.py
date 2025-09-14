@@ -80,14 +80,52 @@ class VelocityReader:
 
     def _read_csv(self) -> pd.DataFrame:
         """
-        Read velocity data from CSV file
+        Read velocity data from CSV file with automatic coordinate conversion.
 
-        Expected CSV format:
-        time, vx, vy, vz
-        or
-        time, vel_n, vel_e, vel_d (for NED coordinates)
-        or
-        time, vel_e, vel_n, vel_u (for ENU coordinates)
+        This method reads velocity data from CSV files and handles various
+        column naming conventions and coordinate systems. It automatically
+        converts between different coordinate frames and standardizes the
+        output format.
+
+        Returns
+        -------
+        pd.DataFrame
+            Velocity data with standardized columns:
+            - time: timestamp in the specified time format
+            - vx, vy, vz: velocity components in m/s (ENU frame)
+
+        Raises
+        ------
+        ValueError
+            If required velocity columns are missing after processing
+        RuntimeError
+            If there's an error reading or processing the CSV file
+
+        Notes
+        -----
+        Supported CSV formats:
+        1. Direct format: time, vx, vy, vz
+        2. NED format: time, vel_n, vel_e, vel_d
+        3. ENU format: time, vel_n, vel_e, vel_u
+
+        Coordinate conversions:
+        - NED to ENU: vx=vel_e, vy=vel_n, vz=-vel_d
+        - ENU: vx=vel_e, vy=vel_n, vz=vel_u
+
+        Supported alternative column names:
+        - timestamp, unix_time, gps_time -> time
+        - vel_x, velocity_x -> vx
+        - vel_y, velocity_y -> vy
+        - vel_z, velocity_z -> vz
+        - vel_n, velocity_n -> vn (north)
+        - vel_e, velocity_e -> ve (east)
+        - vel_d, velocity_d -> vd (down)
+        - vel_u, velocity_u -> vu (up)
+
+        Time format conversion:
+        - If time_format='unix': converts UNIX time to GPS time
+        - If time_format='utc': raises NotImplementedError
+        - If time_format='gps': uses time as-is
         """
         try:
             # Try reading with different column name variations
@@ -174,19 +212,40 @@ class VelocityReader:
 
     def get_velocity_at_time(self, gps_time: float, method: str = 'linear') -> Optional[np.ndarray]:
         """
-        Get interpolated velocity at specific GPS time
+        Get interpolated velocity at a specific GPS time.
 
-        Parameters:
-        -----------
+        This method provides temporal interpolation of velocity data,
+        allowing velocity estimation at any time within the data range.
+        The velocity data is cached after the first read for efficiency.
+
+        Parameters
+        ----------
         gps_time : float
-            GPS time in seconds
-        method : str
-            Interpolation method ('linear', 'nearest')
+            GPS time in seconds at which to estimate velocity
+        method : str, default 'linear'
+            Interpolation method to use:
+            - 'linear': Linear interpolation between adjacent points
+            - 'nearest': Use velocity from nearest time point
 
-        Returns:
-        --------
+        Returns
+        -------
         np.ndarray or None
-            Velocity vector [vx, vy, vz] in m/s, or None if time is out of range
+            Velocity vector [vx, vy, vz] in m/s in ENU coordinates.
+            Returns None if the requested time is outside the data range.
+
+        Notes
+        -----
+        - Data is cached internally for efficient repeated queries
+        - Linear interpolation is recommended for smooth velocity estimates
+        - Nearest neighbor can be used when discrete velocity values are preferred
+        - The method automatically handles time bounds checking
+
+        Examples
+        --------
+        >>> reader = VelocityReader('velocity_data.csv')
+        >>> velocity = reader.get_velocity_at_time(123456.789)
+        >>> if velocity is not None:
+        ...     print(f\"Velocity: {velocity[0]:.2f}, {velocity[1]:.2f}, {velocity[2]:.2f} m/s\")
         """
         # Load data only once (cache it)
         if self._data_cache is None:

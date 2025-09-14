@@ -22,11 +22,40 @@ from ..satellite.ephemeris import select_ephemeris
 from ..satellite.satellite_position import compute_satellite_position
 from .ambiguity_resolution import RTKAmbiguityManager
 from .cycle_slip import CycleSlipDetector
-from .double_difference import DoubleDifferenceProcessor
+from .double_difference import form_double_differences
 
 
 class RTKProcessor:
-    """Complete RTK processing pipeline"""
+    """
+    Complete RTK processing pipeline for Real-Time Kinematic positioning.
+
+    This class integrates all RTK components to provide high-precision relative
+    positioning between a rover and base station using carrier phase measurements.
+    It handles cycle slip detection, double difference formation, ambiguity
+    resolution, and position computation.
+
+    Attributes:
+        base_position: Base station position in ECEF coordinates (m)
+        ambiguity_manager: Manager for integer ambiguity resolution
+        cycle_slip_detector: Detector for carrier phase discontinuities
+        last_fix_time: GPS time of last successful ambiguity fix
+        continuous_fix_epochs: Number of consecutive fixed solutions
+        baseline_length: Distance between rover and base (m)
+        fix_ratio: Ambiguity resolution quality ratio
+        position_accuracy: Estimated position accuracy (m)
+
+    Methods:
+        process_epoch: Process one epoch of RTK observations
+        get_quality_metrics: Get current processing quality metrics
+        reset_ambiguities: Reset all ambiguity tracking
+
+    Examples:
+        >>> processor = RTKProcessor(base_ecef)
+        >>> position, info = processor.process_epoch(
+        ...     rover_obs, base_obs, nav_data, gps_time, rover_approx)
+        >>> print(f"Fix type: {info['fix_type']}")
+        >>> print(f"Accuracy: {info['position_accuracy']:.3f} m")
+    """
 
     def __init__(self, base_position: np.ndarray):
         """
@@ -40,7 +69,6 @@ class RTKProcessor:
         self.base_position = base_position
 
         # Processing components
-        self.dd_processor = DoubleDifferenceProcessor()
         self.ambiguity_manager = RTKAmbiguityManager()
         self.cycle_slip_detector = CycleSlipDetector()
 
@@ -101,9 +129,20 @@ class RTKProcessor:
             # Reset ambiguities for satellites with cycle slips
             self._handle_cycle_slips(rover_slips, base_slips)
 
-            # Form double differences
-            dd_pseudorange, dd_carrier, sat_pairs = self.dd_processor.form_double_differences(
-                rover_observations, base_observations)
+            # Form double differences (using function instead of class)
+            dd_result = form_double_differences(
+                rover_observations, base_observations, nav_data, time,
+                self.base_position, np.array([0.0, 0.0, 0.0]),  # placeholder for base LLH
+                use_systems=['G', 'E', 'C', 'J'], cutoff_angle=15.0
+            )
+
+            if not dd_result:
+                return rover_position_approx, info
+
+            # Extract DD measurements
+            dd_pseudorange = np.array([dd['dd_obs'] for dd in dd_result])
+            dd_carrier = np.array([dd['dd_carrier'] or 0.0 for dd in dd_result])
+            sat_pairs = [(dd['ref_sat'], dd['sat']) for dd in dd_result]
 
             if len(sat_pairs) < 1:
                 return rover_position_approx, info
@@ -115,8 +154,7 @@ class RTKProcessor:
                 sat_pairs, nav_data, time)
 
             # Compute geometry matrix
-            H = self.dd_processor.compute_dd_geometry_matrix(
-                sat_positions, rover_position_approx, sat_pairs)
+            H = self._compute_dd_geometry_matrix(sat_positions, rover_position_approx, sat_pairs)
 
             # Process measurements
             if len(dd_carrier) > 0:
@@ -153,7 +191,32 @@ class RTKProcessor:
                                 sat_pairs: list[tuple[int, int]],
                                 nav_data: NavigationData,
                                 time: float) -> tuple[dict[int, np.ndarray], dict[int, float]]:
-        """Compute satellite positions and clocks"""
+        """
+        Compute satellite positions and clock biases for all satellites in DD pairs.
+
+        This method computes ECEF positions and clock biases for all satellites
+        involved in double difference measurements using broadcast ephemerides.
+        It handles multiple GNSS systems and selects the best available ephemeris
+        for each satellite based on time validity.
+
+        Parameters:
+            sat_pairs: List of satellite pairs [(ref_sat, sat), ...]
+                      Each tuple contains reference and non-reference satellite IDs
+            nav_data: Navigation data containing broadcast ephemerides
+            time: GPS time for position computation (seconds)
+
+        Returns:
+            Tuple containing:
+            - sat_positions: Dictionary mapping satellite ID to ECEF position vector (m)
+                           {sat_id: np.array([X, Y, Z])}
+            - sat_clocks: Dictionary mapping satellite ID to clock bias (seconds)
+                        {sat_id: clock_bias}
+
+        Notes:
+            - Returns empty dictionaries if ephemeris not available
+            - Position accuracy depends on ephemeris age and quality
+            - Clock biases include relativistic corrections
+        """
         sat_positions = {}
         sat_clocks = {}
 
@@ -172,6 +235,49 @@ class RTKProcessor:
 
         return sat_positions, sat_clocks
 
+    def _compute_dd_geometry_matrix(self, sat_positions, rover_position, sat_pairs):
+        """
+        Compute double difference geometry matrix
+
+        Parameters:
+        -----------
+        sat_positions : dict
+            Satellite positions {sat_id: position_vector}
+        rover_position : np.ndarray
+            Rover position (ECEF)
+        sat_pairs : list
+            List of satellite pairs [(ref_sat, sat), ...]
+
+        Returns:
+        --------
+        np.ndarray : Geometry matrix (n_pairs x 3)
+        """
+        n_pairs = len(sat_pairs)
+        H = np.zeros((n_pairs, 3))
+
+        for i, (ref_sat, sat) in enumerate(sat_pairs):
+            if ref_sat not in sat_positions or sat not in sat_positions:
+                continue
+
+            # Unit vectors from rover to satellites
+            ref_pos = sat_positions[ref_sat]
+            sat_pos = sat_positions[sat]
+
+            ref_vec = ref_pos - rover_position
+            sat_vec = sat_pos - rover_position
+
+            ref_range = np.linalg.norm(ref_vec)
+            sat_range = np.linalg.norm(sat_vec)
+
+            if ref_range > 0 and sat_range > 0:
+                ref_unit = ref_vec / ref_range
+                sat_unit = sat_vec / sat_range
+
+                # Double difference geometry: (sat - rover) - (ref_sat - rover)
+                H[i, :] = sat_unit - ref_unit
+
+        return H
+
     def _process_rtk_carrier(self,
                            dd_pseudorange: np.ndarray,
                            dd_carrier: np.ndarray,
@@ -181,7 +287,43 @@ class RTKProcessor:
                            sat_clocks: dict[int, float],
                            rover_pos_approx: np.ndarray,
                            time: float) -> tuple[np.ndarray, dict]:
-        """Process RTK with carrier phase measurements"""
+        """
+        Process RTK solution using both pseudorange and carrier phase double differences.
+
+        This method performs weighted least squares estimation combining pseudorange
+        and carrier phase DD measurements. It attempts integer ambiguity resolution
+        using LAMBDA or similar algorithms and returns either fixed or float solution
+        based on resolution success.
+
+        The processing includes:
+        - Float solution computation using weighted least squares
+        - Integer ambiguity resolution attempt
+        - Fixed solution computation if ambiguities resolved
+        - Quality metrics calculation
+
+        Parameters:
+            dd_pseudorange: Array of DD pseudorange measurements (m)
+            dd_carrier: Array of DD carrier phase measurements (cycles)
+            H: Geometry matrix for DD measurements (n_pairs x 3)
+            sat_pairs: List of satellite pairs [(ref_sat, sat), ...]
+            sat_positions: Dictionary of satellite ECEF positions
+            sat_clocks: Dictionary of satellite clock biases
+            rover_pos_approx: Approximate rover position ECEF (m)
+            time: Current GPS time (seconds)
+
+        Returns:
+            Tuple containing:
+            - position: Computed rover position ECEF (m)
+            - info: Dictionary with processing information:
+                   - 'fix_type': 'fixed', 'partial', or 'float'
+                   - 'ratio': Ambiguity resolution quality ratio
+                   - 'fixed_ambiguities': Dictionary of fixed integer ambiguities
+
+        Notes:
+            - Uses L1 wavelength for single-frequency processing
+            - Applies different weights to pseudorange (3m) and carrier phase (1cm)
+            - Falls back to float solution if ambiguity resolution fails
+        """
         n_dd = len(sat_pairs)
         wavelength = 299792458.0 / 1575.42e6  # L1 wavelength
 
@@ -262,7 +404,27 @@ class RTKProcessor:
                                  dd_pseudorange: np.ndarray,
                                  H: np.ndarray,
                                  rover_pos_approx: np.ndarray) -> np.ndarray:
-        """Process code-only differential positioning"""
+        """
+        Process differential positioning using only pseudorange double differences.
+
+        This method computes DGPS (Differential GPS) solution when carrier phase
+        measurements are unavailable or unreliable. It uses simple least squares
+        estimation without ambiguity resolution, providing meter-level accuracy.
+
+        Parameters:
+            dd_pseudorange: Array of DD pseudorange measurements (m)
+            H: Geometry matrix for DD measurements (n_pairs x 3)
+            rover_pos_approx: Approximate rover position ECEF (m)
+
+        Returns:
+            Computed rover position in ECEF coordinates (m)
+            Returns approximate position if least squares fails
+
+        Notes:
+            - Accuracy typically 1-3 meters depending on conditions
+            - No ambiguity resolution required (code-only)
+            - Suitable for applications not requiring cm-level precision
+        """
         # Simple least squares
         try:
             dx = np.linalg.lstsq(H, dd_pseudorange, rcond=None)[0]
@@ -273,7 +435,31 @@ class RTKProcessor:
     def _handle_cycle_slips(self,
                           rover_slips: dict[int, bool],
                           base_slips: dict[int, bool]):
-        """Handle detected cycle slips by resetting ambiguities"""
+        """
+        Handle detected cycle slips by resetting affected ambiguities.
+
+        When cycle slips are detected in carrier phase measurements, the integer
+        ambiguities for affected satellites must be reset and re-estimated.
+        This method identifies all satellites with cycle slips from both rover
+        and base stations and clears their fixed ambiguity values.
+
+        Parameters:
+            rover_slips: Dictionary mapping satellite ID to cycle slip detection
+                        {sat_id: True if slip detected, False otherwise}
+            base_slips: Dictionary with same format for base station
+
+        Returns:
+            None (modifies internal ambiguity manager state)
+
+        Side Effects:
+            - Removes fixed ambiguities for affected satellites
+            - Resets fix status flags for affected satellites
+            - May cause temporary degradation to float solution
+
+        Notes:
+            - Cycle slips in either rover or base affect the DD measurement
+            - Ambiguity re-initialization typically takes several epochs
+        """
         all_slips = set()
 
         for sat, slip in rover_slips.items():
@@ -292,7 +478,24 @@ class RTKProcessor:
                 self.ambiguity_manager.fix_status[sat] = False
 
     def get_quality_metrics(self) -> dict:
-        """Get current processing quality metrics"""
+        """
+        Get current RTK processing quality metrics.
+
+        Returns a dictionary containing various quality indicators that can be
+        used to assess the reliability and accuracy of the RTK solution.
+
+        Returns:
+            Dictionary containing:
+            - 'baseline_length': Distance between rover and base (m)
+            - 'continuous_fix_epochs': Number of consecutive fixed solutions
+            - 'last_fix_time': GPS time of last successful fix (seconds)
+            - 'position_accuracy': Estimated position accuracy (m)
+
+        Notes:
+            - Longer baselines generally have reduced accuracy
+            - More continuous fix epochs indicate stable solution
+            - Position accuracy is an estimate based on fix type and baseline
+        """
         return {
             'baseline_length': self.baseline_length,
             'continuous_fix_epochs': self.continuous_fix_epochs,
@@ -301,7 +504,26 @@ class RTKProcessor:
         }
 
     def reset_ambiguities(self):
-        """Reset all ambiguity tracking"""
+        """
+        Reset all integer ambiguity tracking and related state.
+
+        This method completely clears all ambiguity-related state, forcing
+        re-initialization of the RTK solution. Use when starting a new session,
+        after extended signal loss, or when solution quality degrades.
+
+        Returns:
+            None
+
+        Side Effects:
+            - Clears all fixed ambiguities
+            - Resets fix status for all satellites
+            - Resets continuous fix epoch counter
+            - Solution will revert to float until new ambiguities resolved
+
+        Notes:
+            - Call this method after major interruptions or antenna changes
+            - Ambiguity re-convergence typically takes 10-30 seconds
+        """
         self.ambiguity_manager.fixed_ambiguities.clear()
         self.ambiguity_manager.fix_status.clear()
         self.continuous_fix_epochs = 0

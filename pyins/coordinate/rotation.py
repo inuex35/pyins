@@ -70,20 +70,45 @@ def euler2dcm(euler: np.ndarray, sequence: str = 'ZYX') -> np.ndarray:
 
 
 def dcm2euler(dcm: np.ndarray, sequence: str = 'ZYX') -> np.ndarray:
-    """
-    Convert Direction Cosine Matrix to Euler angles
+    """Convert Direction Cosine Matrix to Euler angles
 
-    Parameters:
-    -----------
+    Extracts Euler angles from a direction cosine matrix using the
+    specified rotation sequence.
+
+    Parameters
+    ----------
     dcm : np.ndarray
-        Direction Cosine Matrix (3x3)
-    sequence : str
-        Rotation sequence
+        Direction Cosine Matrix (3x3), must be orthogonal
+    sequence : str, optional
+        Rotation sequence string, by default 'ZYX'
+        Supported sequences: 'ZYX' (roll-pitch-yaw), 'XYZ'
 
-    Returns:
+    Returns
+    -------
+    np.ndarray
+        Euler angles [angle1, angle2, angle3] in radians
+        For 'ZYX': [roll, pitch, yaw]
+        For 'XYZ': [roll, pitch, yaw] in XYZ order
+
+    Raises
+    ------
+    NotImplementedError
+        If the specified rotation sequence is not implemented
+
+    Notes
+    -----
+    - 'ZYX' sequence is the aerospace/navigation convention (roll-pitch-yaw)
+    - Gimbal lock can occur when the middle angle is ±90 degrees
+    - In gimbal lock situations, one degree of freedom is lost
+
+    Examples
     --------
-    euler : np.ndarray
-        Euler angles (rad)
+    >>> import numpy as np
+    >>> # Create DCM from known Euler angles
+    >>> euler_in = np.array([0.1, 0.2, 0.3])  # roll, pitch, yaw
+    >>> dcm = euler2dcm(euler_in)
+    >>> euler_out = dcm2euler(dcm, 'ZYX')
+    >>> np.allclose(euler_in, euler_out)  # Should be True
     """
     if sequence == 'ZYX':
         # Roll-Pitch-Yaw convention
@@ -305,17 +330,99 @@ def quaternion_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
 
 
 def quaternion_conjugate(q: np.ndarray) -> np.ndarray:
-    """Get quaternion conjugate"""
+    """Get quaternion conjugate
+
+    Computes the conjugate of a quaternion, which reverses the sign
+    of the vector components while keeping the scalar component unchanged.
+
+    Parameters
+    ----------
+    q : np.ndarray
+        Quaternion [w, x, y, z] in scalar-first convention
+
+    Returns
+    -------
+    np.ndarray
+        Conjugate quaternion [w, -x, -y, -z]
+
+    Notes
+    -----
+    For a unit quaternion representing rotation, the conjugate represents
+    the inverse rotation.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> q = np.array([0.7071, 0.7071, 0, 0])  # 90° rotation around X-axis
+    >>> q_conj = quaternion_conjugate(q)
+    >>> print(q_conj)  # [0.7071, -0.7071, 0, 0]
+    """
     return np.array([q[0], -q[1], -q[2], -q[3]])
 
 
 def quaternion_inverse(q: np.ndarray) -> np.ndarray:
-    """Get quaternion inverse"""
+    """Get quaternion inverse
+
+    Computes the multiplicative inverse of a quaternion.
+
+    Parameters
+    ----------
+    q : np.ndarray
+        Quaternion [w, x, y, z] in scalar-first convention
+
+    Returns
+    -------
+    np.ndarray
+        Inverse quaternion q^(-1)
+
+    Notes
+    -----
+    For a unit quaternion, the inverse equals the conjugate.
+    For non-unit quaternions: q^(-1) = q* / |q|^2
+    where q* is the conjugate and |q| is the norm.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> q = np.array([1.0, 1.0, 0.0, 0.0])  # Non-unit quaternion
+    >>> q_inv = quaternion_inverse(q)
+    >>> # Verify: q * q_inv should give identity [1, 0, 0, 0]
+    """
     return quaternion_conjugate(q) / np.linalg.norm(q)**2
 
 
 class RotationIntegrator:
-    """Integrate angular velocity to update rotation"""
+    """Integrate angular velocity to update rotation state
+
+    This class provides methods to integrate angular velocity measurements
+    over time to update rotation representations (quaternions or DCM).
+    It supports different integration methods for various accuracy and
+    computational requirements.
+
+    Parameters
+    ----------
+    method : str, optional
+        Integration method to use, by default 'quaternion'.
+        Options: 'quaternion', 'dcm', 'euler'
+
+    Attributes
+    ----------
+    method : str
+        Current integration method
+
+    Notes
+    -----
+    Quaternion integration is generally preferred as it avoids singularities
+    and maintains numerical stability better than Euler angles.
+
+    Examples
+    --------
+    >>> integrator = RotationIntegrator(method='quaternion')
+    >>> q0 = np.array([1, 0, 0, 0])  # Identity quaternion
+    >>> omega = np.array([0.1, 0.0, 0.0])  # Angular velocity rad/s
+    >>> dt = 0.01  # Time step
+    >>> q1 = integrator.integrate(q0, omega, dt)
+    """
 
     def __init__(self, method: str = 'quaternion'):
         """
@@ -329,22 +436,49 @@ class RotationIntegrator:
         self.method = method
 
     def integrate(self, R: np.ndarray, omega: np.ndarray, dt: float) -> np.ndarray:
-        """
-        Integrate rotation with angular velocity
+        """Integrate rotation state using angular velocity
 
-        Parameters:
-        -----------
+        Updates the rotation state by integrating angular velocity over
+        a specified time step using the selected integration method.
+
+        Parameters
+        ----------
         R : np.ndarray
-            Current rotation (quaternion, DCM, or Euler angles)
+            Current rotation state in the format specified by self.method:
+            - quaternion: [w, x, y, z] (4-element array)
+            - dcm: direction cosine matrix (3x3 array)
+            - euler: Euler angles (3-element array)
         omega : np.ndarray
-            Angular velocity (rad/s)
+            Angular velocity vector [wx, wy, wz] in rad/s
         dt : float
-            Time step (s)
+            Integration time step in seconds
 
-        Returns:
+        Returns
+        -------
+        np.ndarray
+            Updated rotation state in the same format as input
+
+        Raises
+        ------
+        ValueError
+            If an unknown integration method is specified
+
+        Notes
+        -----
+        - Quaternion method: Uses first-order integration with normalization
+        - DCM method: Uses skew-symmetric matrix integration with SVD orthogonalization
+        - Euler method: Not yet implemented
+
+        The quaternion method is recommended for most applications due to
+        its numerical stability and absence of singularities.
+
+        Examples
         --------
-        R_new : np.ndarray
-            Updated rotation
+        >>> integrator = RotationIntegrator('quaternion')
+        >>> q = np.array([1, 0, 0, 0])  # Identity rotation
+        >>> omega = np.array([0, 0, 0.1])  # Yaw at 0.1 rad/s
+        >>> dt = 0.01
+        >>> q_new = integrator.integrate(q, omega, dt)
         """
         if self.method == 'quaternion':
             # Quaternion integration

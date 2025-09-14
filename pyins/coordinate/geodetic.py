@@ -242,7 +242,24 @@ def local_gravity_vector(llh: np.ndarray) -> np.ndarray:
 
 
 class GeodeticGrid:
-    """Grid-based geodetic computations"""
+    """Grid-based geodetic computations
+
+    This class provides efficient interpolation of geodetic parameters
+    like gravity and radii of curvature using precomputed grid values.
+
+    Attributes
+    ----------
+    lat_grid : np.ndarray
+        Latitude grid points in radians
+    lon_grid : np.ndarray
+        Longitude grid points in radians
+    gravity_grid : np.ndarray
+        Precomputed gravity values at grid points (m/s^2)
+    M_grid : np.ndarray
+        Meridional radii of curvature at latitude grid points (m)
+    N_grid : np.ndarray
+        Prime vertical radii of curvature at latitude grid points (m)
+    """
 
     def __init__(self, lat_min: float, lat_max: float,
                  lon_min: float, lon_max: float,
@@ -273,7 +290,34 @@ class GeodeticGrid:
                 self.gravity_grid[i, j] = gravity_model(lat, 0.0)
 
     def interpolate_gravity(self, lat: float, lon: float) -> float:
-        """Interpolate gravity from grid"""
+        """Interpolate gravity from precomputed grid
+
+        Uses bilinear interpolation to estimate gravity at the specified location
+        from the precomputed gravity grid values.
+
+        Parameters
+        ----------
+        lat : float
+            Latitude in radians
+        lon : float
+            Longitude in radians
+
+        Returns
+        -------
+        float
+            Interpolated gravity value in m/s^2
+
+        Notes
+        -----
+        The interpolation uses bilinear interpolation between the four
+        nearest grid points. Values outside the grid bounds are clamped
+        to the grid boundaries.
+
+        Examples
+        --------
+        >>> grid = GeodeticGrid(-np.pi/2, np.pi/2, -np.pi, np.pi, 0.1, 0.1)
+        >>> gravity = grid.interpolate_gravity(np.radians(35.0), np.radians(139.0))
+        """
         # Find grid indices
         i = np.searchsorted(self.lat_grid, lat) - 1
         j = np.searchsorted(self.lon_grid, lon) - 1

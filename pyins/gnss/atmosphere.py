@@ -12,9 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Atmospheric corrections for GNSS signals
-Implements ionospheric and tropospheric delay models
+"""Atmospheric corrections for GNSS signals.
+
+This module provides comprehensive atmospheric delay correction models for GNSS
+signal processing. It implements both ionospheric and tropospheric delay models
+that are essential for high-precision GNSS positioning.
+
+The atmosphere affects GNSS signals in two primary ways:
+1. Ionospheric delays: Frequency-dependent delays caused by free electrons
+2. Tropospheric delays: Frequency-independent delays due to neutral atmosphere
+
+Ionospheric Models:
+- Klobuchar model: Broadcast model using 8 coefficients (α0-α3, β0-β3)
+- Ionosphere-free combinations: Eliminates first-order ionospheric effects
+- TEC estimation: Total Electron Content from dual-frequency measurements
+
+Tropospheric Models:
+- Saastamoinen model: Standard model with meteorological parameters
+- Hopfield model: Alternative tropospheric delay model
+- Niell mapping functions: Advanced elevation-dependent corrections
+- Standard atmosphere models with height corrections
+
+Key Features:
+- Support for multiple GNSS frequencies
+- Standard and meteorological parameter inputs
+- Mapping functions for elevation-dependent effects
+- Comprehensive atmospheric correction pipeline
+- Real-time and post-processing applications
+
+Functions:
+    ionosphere_klobuchar: Klobuchar ionospheric delay model
+    ionosphere_free_combination: Dual-frequency ionosphere elimination
+    ionosphere_tec_from_dual_freq: TEC estimation from measurements
+    troposphere_saastamoinen: Saastamoinen tropospheric model
+    troposphere_hopfield: Hopfield tropospheric model
+    troposphere_niell_mapping: Niell mapping functions
+    apply_atmospheric_corrections: Unified correction application
+    estimate_ztd: Zenith Total Delay estimation
+
+Notes:
+    All delay outputs are in meters.
+    Angles are in radians unless otherwise specified.
+    Standard frequencies: L1=1575.42 MHz, L2=1227.60 MHz, L5=1176.45 MHz.
+    Meteorological parameters: pressure (hPa), temperature (°C), humidity (%).
 """
 
 import numpy as np
@@ -26,20 +66,74 @@ FE_WGS84 = 1.0 / 298.257223563  # Earth flattening
 
 
 def ionosphere_klobuchar(lat, lon, azimuth, elevation, tow, alpha, beta):
-    """
-    Klobuchar ionospheric delay model (broadcast model)
-    
-    Args:
-        lat: Receiver latitude (rad)
-        lon: Receiver longitude (rad)
-        azimuth: Satellite azimuth (rad)
-        elevation: Satellite elevation (rad)
-        tow: GPS time of week (s)
-        alpha: Alpha coefficients [α0, α1, α2, α3]
-        beta: Beta coefficients [β0, β1, β2, β3]
-    
-    Returns:
-        iono_delay: Ionospheric delay on L1 (m)
+    """Calculate ionospheric delay using the Klobuchar broadcast model.
+
+    Implements the Klobuchar ionospheric delay model as specified in the GPS
+    Interface Control Document (ICD-GPS-200). This model provides a first-order
+    correction for ionospheric delays using 8 coefficients broadcast in the
+    GPS navigation message.
+
+    Parameters
+    ----------
+    lat : float
+        Receiver geodetic latitude in radians (-π/2 to π/2).
+    lon : float
+        Receiver geodetic longitude in radians (-π to π).
+    azimuth : float
+        Satellite azimuth angle in radians (0 to 2π), measured clockwise from North.
+    elevation : float
+        Satellite elevation angle in radians (0 to π/2), measured from horizon.
+    tow : float
+        GPS Time of Week in seconds (0 to 604800).
+    alpha : array_like of shape (4,)
+        Alpha coefficients [α0, α1, α2, α3] in [s, s/semi-circle, s/semi-circle², s/semi-circle³].
+        Broadcast in GPS navigation message subframes 4 and 5.
+    beta : array_like of shape (4,)
+        Beta coefficients [β0, β1, β2, β3] in [s, s/semi-circle, s/semi-circle², s/semi-circle³].
+        Broadcast in GPS navigation message subframes 4 and 5.
+
+    Returns
+    -------
+    float
+        Ionospheric delay on L1 frequency in meters. Always non-negative.
+        Returns 0.0 if elevation ≤ 0.
+
+    Notes
+    -----
+    The Klobuchar model computes ionospheric delay through these steps:
+    1. Calculate ionospheric pierce point at 350 km altitude
+    2. Compute geomagnetic latitude at pierce point
+    3. Calculate local time at pierce point
+    4. Compute amplitude and period using polynomial expansions
+    5. Apply cosine function with slant factor correction
+
+    Model limitations:
+    - Accuracy: ~50% RMS reduction in ionospheric error
+    - Valid for elevation angles > 5°
+    - Single-layer model at 350 km altitude
+    - Does not account for storm conditions or scintillation
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Typical Klobuchar coefficients
+    >>> alpha = [1.4e-8, 0.0, -5.96e-8, 0.0]
+    >>> beta = [1.4e5, 0.0, -1.31e5, 6.55e4]
+    >>>
+    >>> # Calculate delay for satellite at 30° elevation, 45° azimuth
+    >>> lat, lon = np.radians(40.0), np.radians(-74.0)  # New York
+    >>> az, el = np.radians(45.0), np.radians(30.0)
+    >>> tow = 43200.0  # Noon GPS time
+    >>>
+    >>> delay = ionosphere_klobuchar(lat, lon, az, el, tow, alpha, beta)
+    >>> print(f"Ionospheric delay: {delay:.3f} m")
+
+    References
+    ----------
+    - Klobuchar, J.A. (1987). Ionospheric Time-Delay Algorithms for
+      Single-Frequency GPS Users. IEEE Transactions on Aerospace and
+      Electronic Systems, AES-23(3), 325-331.
+    - GPS Interface Control Document ICD-GPS-200C
     """
     if elevation <= 0:
         return 0.0

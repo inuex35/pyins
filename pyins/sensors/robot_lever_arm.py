@@ -25,20 +25,56 @@ import yaml
 
 @dataclass
 class ComponentFrame:
-    """Represents a component's coordinate frame relative to robot base"""
+    """
+    Represents a component's coordinate frame relative to robot base.
+
+    This dataclass stores the position and orientation of a robot component
+    (sensor, actuator, etc.) relative to the robot's base coordinate frame.
+
+    Attributes:
+        position (np.ndarray): 3D position vector [x, y, z] in meters
+        rotation (np.ndarray): 3x3 rotation matrix from component to base frame
+        description (str): Optional description of the component
+
+    Notes:
+        The rotation matrix transforms vectors from component frame to base frame:
+        vector_base = rotation @ vector_component
+    """
     position: np.ndarray  # 3D position vector [x, y, z] in meters
     rotation: np.ndarray = field(default_factory=lambda: np.eye(3))  # Rotation matrix from component to base frame
     description: str = ""  # Optional description of the component
 
     def __post_init__(self):
-        """Validate inputs"""
+        """
+        Validate and reshape input arrays after initialization.
+
+        This method ensures position and rotation arrays have the correct shape
+        and converts them to numpy arrays if necessary.
+
+        Raises:
+            No explicit exceptions, but numpy operations may raise if inputs are invalid
+        """
         if self.position.shape != (3,):
             self.position = np.array(self.position).reshape(3)
         if self.rotation.shape != (3, 3):
             self.rotation = np.array(self.rotation).reshape(3, 3)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for serialization"""
+        """
+        Convert component frame to dictionary for serialization.
+
+        Returns:
+        --------
+        dict
+            Dictionary containing position, rotation, and description
+            with numpy arrays converted to Python lists
+
+        Examples:
+            >>> frame = ComponentFrame(np.array([1, 2, 3]))
+            >>> data = frame.to_dict()
+            >>> print(data['position'])
+            [1.0, 2.0, 3.0]
+        """
         return {
             'position': self.position.tolist(),
             'rotation': self.rotation.tolist(),
@@ -47,7 +83,24 @@ class ComponentFrame:
 
     @classmethod
     def from_dict(cls, data: dict) -> 'ComponentFrame':
-        """Create from dictionary"""
+        """
+        Create ComponentFrame instance from dictionary data.
+
+        Parameters:
+        -----------
+        data : dict
+            Dictionary containing 'position', 'rotation' (optional), and
+            'description' (optional) keys
+
+        Returns:
+        --------
+        ComponentFrame
+            New ComponentFrame instance created from the dictionary data
+
+        Examples:
+            >>> data = {'position': [1, 2, 3], 'description': 'IMU sensor'}
+            >>> frame = ComponentFrame.from_dict(data)
+        """
         return cls(
             position=np.array(data['position']),
             rotation=np.array(data.get('rotation', np.eye(3))),
@@ -56,10 +109,34 @@ class ComponentFrame:
 
 
 class RobotLeverArm:
-    """Manages lever arms for arbitrary robot components"""
+    """
+    Manages lever arms for arbitrary robot components.
+
+    This class provides a comprehensive system for managing the positions and
+    orientations of various components on a robot platform. It supports
+    position/velocity/acceleration compensation, coordinate transformations,
+    and configuration persistence.
+
+    Attributes:
+        components (dict): Dictionary mapping component IDs to ComponentFrame objects
+        _base_frame_id (str): Identifier for the base coordinate frame
+
+    Examples:
+        Basic robot configuration:
+
+        >>> robot = RobotLeverArm()
+        >>> robot.add_component('imu', [0.1, 0, 0.05])
+        >>> robot.add_component('gnss', [0.2, 0, 0.3])
+        >>> pos = robot.compensate_position('gnss', base_pos, base_rot)
+    """
 
     def __init__(self):
-        """Initialize the robot lever arm manager"""
+        """
+        Initialize the robot lever arm manager.
+
+        Creates an empty component registry with 'base' as the default
+        base frame identifier.
+        """
         self.components: dict[str, ComponentFrame] = {}
         self._base_frame_id = "base"  # Default base frame identifier
 
@@ -94,16 +171,52 @@ class RobotLeverArm:
         )
 
     def get_component(self, component_id: str) -> Optional[ComponentFrame]:
-        """Get component frame information"""
+        """
+        Get component frame information.
+
+        Parameters:
+        -----------
+        component_id : str
+            Component identifier to look up
+
+        Returns:
+        --------
+        Optional[ComponentFrame]
+            ComponentFrame object for the specified component, or None if not found
+        """
         return self.components.get(component_id)
 
     def get_position(self, component_id: str) -> Optional[np.ndarray]:
-        """Get component position"""
+        """
+        Get component position vector.
+
+        Parameters:
+        -----------
+        component_id : str
+            Component identifier
+
+        Returns:
+        --------
+        Optional[np.ndarray]
+            3D position vector of the component, or None if component not found
+        """
         component = self.get_component(component_id)
         return component.position if component else None
 
     def get_rotation(self, component_id: str) -> Optional[np.ndarray]:
-        """Get component rotation matrix"""
+        """
+        Get component rotation matrix.
+
+        Parameters:
+        -----------
+        component_id : str
+            Component identifier
+
+        Returns:
+        --------
+        Optional[np.ndarray]
+            3x3 rotation matrix from component to base frame, or None if component not found
+        """
         component = self.get_component(component_id)
         return component.rotation if component else None
 
@@ -277,11 +390,36 @@ class RobotLeverArm:
         return transformed
 
     def list_components(self) -> list[str]:
-        """List all registered component IDs"""
+        """
+        List all registered component IDs.
+
+        Returns:
+        --------
+        list[str]
+            List of all component identifiers currently registered
+
+        Examples:
+            >>> robot.add_component('imu', [0, 0, 0])
+            >>> robot.add_component('gnss', [0.2, 0, 0.3])
+            >>> print(robot.list_components())
+            ['imu', 'gnss']
+        """
         return list(self.components.keys())
 
     def get_all_positions(self) -> dict[str, np.ndarray]:
-        """Get positions of all components"""
+        """
+        Get positions of all registered components.
+
+        Returns:
+        --------
+        dict[str, np.ndarray]
+            Dictionary mapping component IDs to their 3D position vectors
+
+        Examples:
+            >>> positions = robot.get_all_positions()
+            >>> print(positions['imu'])
+            [0.1 0.0 0.05]
+        """
         return {comp_id: comp.position
                 for comp_id, comp in self.components.items()}
 
@@ -316,12 +454,23 @@ class RobotLeverArm:
 
     def load_from_file(self, filepath: Union[str, Path]) -> None:
         """
-        Load lever arm configuration from file
+        Load lever arm configuration from file.
+
+        Supports both YAML and JSON formats. The file format is determined
+        automatically from the file extension.
 
         Parameters:
         -----------
         filepath : str or Path
-            Path to configuration file
+            Path to configuration file (.yaml, .yml, or .json)
+
+        Raises:
+            ValueError: If file format is not supported
+            FileNotFoundError: If the specified file doesn't exist
+            yaml.YAMLError or json.JSONDecodeError: If file parsing fails
+
+        Examples:
+            >>> robot.load_from_file('robot_config.yaml')
         """
         filepath = Path(filepath)
 
@@ -342,14 +491,29 @@ class RobotLeverArm:
 
     def visualize_components(self, ax=None, show_labels: bool = True) -> None:
         """
-        Visualize component positions in 3D
+        Visualize component positions in 3D.
+
+        Creates a 3D scatter plot showing the positions of all components
+        relative to the base frame, with optional labels and connecting lines.
 
         Parameters:
         -----------
         ax : matplotlib axis, optional
-            3D axis to plot on
-        show_labels : bool
-            Whether to show component labels
+            3D matplotlib axis to plot on. If None, a new figure is created
+        show_labels : bool, optional
+            Whether to show component labels next to each point (default: True)
+
+        Returns:
+        --------
+        matplotlib axis
+            The axis object used for plotting
+
+        Raises:
+            ImportError: If matplotlib is not available
+
+        Examples:
+            >>> robot.visualize_components(show_labels=True)
+            >>> plt.show()
         """
         try:
             import matplotlib.pyplot as plt
@@ -392,7 +556,31 @@ class RobotLeverArm:
 
 # Convenience functions for common robot configurations
 def create_standard_robot_config() -> RobotLeverArm:
-    """Create a standard robot configuration with common components"""
+    """
+    Create a standard robot configuration with common components.
+
+    This convenience function creates a RobotLeverArm instance with typical
+    robot components including IMU, GNSS antennas, and wheel positions.
+    This serves as an example configuration and starting point.
+
+    Returns:
+    --------
+    RobotLeverArm
+        Configured robot with standard component layout
+
+    Notes:
+        The returned configuration includes:
+        - Base frame at origin
+        - IMU sensor at [0.1, 0, 0.05] m
+        - Main GNSS antenna at [0.2, 0, 0.3] m
+        - Auxiliary GNSS antenna at [-0.2, 0, 0.3] m
+        - Four wheels at typical positions for a car-like robot
+
+    Examples:
+        >>> robot = create_standard_robot_config()
+        >>> print(robot.list_components())
+        ['base', 'imu', 'gnss_main', 'gnss_aux', 'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']
+    """
     robot = RobotLeverArm()
 
     # Add common components (example configuration)

@@ -246,18 +246,115 @@ def get_system_constellation_size(system: SatelliteSystem) -> int:
 
 
 class ProcessingOptions:
-    """Processing options for GNSS data processing"""
+    """
+    Processing options for GNSS data processing.
+
+    This class manages configuration settings for GNSS processing, including
+    satellite exclusion/inclusion and navigation system selection.
+
+    Attributes
+    ----------
+    exsats : np.ndarray
+        Excluded satellites array of length 500. Values:
+        - 0: Auto selection (default)
+        - 1: Force exclude satellite
+        - 2: Force include satellite
+    navsys : int
+        Navigation systems bitmask. Default 0x1F enables GPS|GLO|GAL|BDS|QZS.
+        Bitmask values:
+        - 0x01: GPS
+        - 0x02: GLONASS
+        - 0x04: Galileo
+        - 0x08: BeiDou
+        - 0x10: QZSS
+        - 0x20: SBAS
+
+    Examples
+    --------
+    >>> opt = ProcessingOptions()
+    >>> opt.set_excluded_satellite(15, exclude=True)  # Exclude GPS satellite 15
+    >>> opt.set_navigation_systems(gps=True, glonass=False, galileo=True)
+    """
     def __init__(self):
+        """
+        Initialize processing options with default settings.
+
+        Notes
+        -----
+        Default settings enable all major GNSS systems (GPS, GLONASS, Galileo,
+        BeiDou, QZSS) with automatic satellite selection for all satellites.
+        """
         self.exsats = np.zeros(500, dtype=int)  # Excluded satellites array (0: auto, 1: exclude, 2: include)
         self.navsys = 0x1F  # Navigation systems (bit mask: GPS|GLO|GAL|BDS|QZS)
 
     def set_excluded_satellite(self, sat_num: int, exclude: bool = True):
-        """Set satellite exclusion status"""
+        """
+        Set satellite exclusion status.
+
+        Parameters
+        ----------
+        sat_num : int
+            Satellite PRN number (1-500)
+        exclude : bool, optional
+            True to exclude satellite, False to force include (default: True)
+
+        Notes
+        -----
+        This method overrides automatic satellite selection:
+        - exclude=True: Satellite will be excluded from processing
+        - exclude=False: Satellite will be forced to be included
+        - Only satellites with valid PRN numbers (1-500) are affected
+
+        Examples
+        --------
+        >>> opt = ProcessingOptions()
+        >>> opt.set_excluded_satellite(15, exclude=True)   # Exclude GPS satellite 15
+        >>> opt.set_excluded_satellite(22, exclude=False)  # Force include GPS satellite 22
+        """
         if 1 <= sat_num <= 500:
             self.exsats[sat_num - 1] = 1 if exclude else 2
 
     def set_navigation_systems(self, gps=True, glonass=True, galileo=True, beidou=True, qzss=True, sbas=False):
-        """Set navigation systems to use"""
+        """
+        Set navigation systems to use in processing.
+
+        Parameters
+        ----------
+        gps : bool, optional
+            Enable GPS system (default: True)
+        glonass : bool, optional
+            Enable GLONASS system (default: True)
+        galileo : bool, optional
+            Enable Galileo system (default: True)
+        beidou : bool, optional
+            Enable BeiDou system (default: True)
+        qzss : bool, optional
+            Enable QZSS system (default: True)
+        sbas : bool, optional
+            Enable SBAS system (default: False)
+
+        Notes
+        -----
+        This method sets the navigation systems bitmask (navsys) by combining
+        individual system flags. Disabled systems will have their satellites
+        automatically excluded from processing.
+
+        The bitmask values are:
+        - GPS: 0x01
+        - GLONASS: 0x02
+        - Galileo: 0x04
+        - BeiDou: 0x08
+        - QZSS: 0x10
+        - SBAS: 0x20
+
+        Examples
+        --------
+        >>> opt = ProcessingOptions()
+        >>> opt.set_navigation_systems(gps=True, glonass=False, galileo=True)
+        >>> # Only GPS and Galileo will be used
+
+        >>> opt.set_navigation_systems(sbas=True)  # Enable SBAS in addition to defaults
+        """
         self.navsys = 0
         if gps: self.navsys |= 0x01       # SYS_GPS
         if glonass: self.navsys |= 0x02   # SYS_GLO
@@ -268,7 +365,39 @@ class ProcessingOptions:
 
 
 def get_system_bitmask(system: SatelliteSystem) -> int:
-    """Get system bitmask for navigation system selection"""
+    """
+    Get system bitmask for navigation system selection.
+
+    Parameters
+    ----------
+    system : SatelliteSystem
+        Satellite system enum value
+
+    Returns
+    -------
+    int
+        Bitmask value for the satellite system, 0 if unknown
+
+    Notes
+    -----
+    Bitmask values correspond to RTKLIB system definitions:
+    - GPS: 0x01 (SYS_GPS)
+    - GLONASS: 0x02 (SYS_GLO)
+    - Galileo: 0x04 (SYS_GAL)
+    - BeiDou: 0x08 (SYS_BDS)
+    - QZSS: 0x10 (SYS_QZS)
+    - SBAS: 0x20 (SYS_SBS)
+
+    Examples
+    --------
+    >>> mask = get_system_bitmask(SatelliteSystem.GPS)
+    >>> print(f"GPS bitmask: 0x{mask:02X}")
+    GPS bitmask: 0x01
+
+    >>> combined = get_system_bitmask(SatelliteSystem.GPS) | get_system_bitmask(SatelliteSystem.GALILEO)
+    >>> print(f"GPS+Galileo: 0x{combined:02X}")
+    GPS+Galileo: 0x05
+    """
     system_masks = {
         SatelliteSystem.GPS: 0x01,
         SatelliteSystem.GLONASS: 0x02,

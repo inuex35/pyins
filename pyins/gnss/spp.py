@@ -12,7 +12,63 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single Point Positioning (SPP) core implementation"""
+"""Single Point Positioning (SPP) core implementation.
+
+This module provides the core functionality for GNSS Single Point Positioning (SPP),
+which estimates receiver position, velocity, and clock parameters using pseudorange
+measurements from multiple GNSS satellites. SPP forms the foundation for all GNSS
+positioning algorithms.
+
+SPP Algorithm Overview:
+1. Satellite position and clock computation from ephemeris
+2. Geometric range calculation and atmospheric corrections
+3. Iterative least squares position estimation
+4. Receiver Autonomous Integrity Monitoring (RAIM) for quality control
+5. Solution validation and accuracy assessment
+
+Key Features:
+- Multi-constellation support (GPS, GLONASS, Galileo, BeiDou, QZSS)
+- Robust iterative least squares estimation
+- Atmospheric delay corrections (ionosphere/troposphere)
+- Earth rotation and relativistic corrections
+- Integrated RAIM fault detection and exclusion
+- Real-time and post-processing capabilities
+- Comprehensive error modeling and weighting
+
+Coordinate Systems:
+- Input: GNSS observations and ephemeris data
+- Computation: ECEF (Earth-Centered, Earth-Fixed) coordinates
+- Output: Position in ECEF and geodetic (lat/lon/height) formats
+- Time: GPS time system with constellation-specific corrections
+
+Error Sources Handled:
+- Satellite clock and ephemeris errors
+- Ionospheric delays (Klobuchar model or dual-frequency)
+- Tropospheric delays (Saastamoinen-like model)
+- Receiver clock bias (estimated parameter)
+- Earth rotation during signal propagation
+- Relativistic effects (satellite and gravitational)
+
+Functions:
+    tropmodel_simple: Simple tropospheric delay model
+    sagnac_correction: Sagnac effect correction for Earth rotation
+    geodist: Geometric distance and unit vector calculation
+    satazel: Satellite azimuth and elevation computation
+    varerr: Measurement variance calculation
+    single_point_positioning: Main SPP algorithm implementation
+
+Constants:
+    MAXITR: Maximum iterations for position convergence (10)
+    MIN_EL: Minimum elevation angle in degrees (5.0)
+    ERR_SAAS: Saastamoinen model standard error (0.3 m)
+    ERR_ION: Ionospheric model standard error (5.0 m)
+    ERR_CBIAS: Code bias standard error (0.3 m)
+
+Notes:
+    All positions are in meters using WGS84 reference system.
+    Clock biases are in meters (multiply by c for time units).
+    Standard deviations reflect typical SPP accuracy: 3-5m horizontal, 5-10m vertical.
+"""
 
 import numpy as np
 from numpy.linalg import norm

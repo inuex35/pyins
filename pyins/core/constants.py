@@ -147,7 +147,25 @@ CODE_L1X = 9        # L1X (GPS,QZS)
 
 # Wavelengths
 def lam_carr(sys, freq):
-    """Get carrier wavelength"""
+    """Get carrier wavelength for a given frequency.
+
+    Parameters
+    ----------
+    sys : int
+        Satellite system ID (not used in current implementation)
+    freq : float
+        Carrier frequency in Hz
+
+    Returns
+    -------
+    float
+        Carrier wavelength in meters, or 0.0 if frequency is invalid
+
+    Examples
+    --------
+    >>> lam_carr(SYS_GPS, FREQ_L1)
+    0.19029367279836187
+    """
     return CLIGHT / freq if freq > 0 else 0.0
 
 # Add SYS_NONE for invalid satellites
@@ -155,9 +173,27 @@ SYS_NONE = 0x00
 
 # Satellite system functions
 def sat2sys(sat):
-    """Get satellite system from satellite number
+    """Get satellite system from satellite number.
 
-    Uses unified satellite numbering from satellite_numbering.py
+    Uses unified satellite numbering from satellite_numbering.py to determine
+    which GNSS constellation a satellite belongs to.
+
+    Parameters
+    ----------
+    sat : int
+        Satellite number (1-255)
+
+    Returns
+    -------
+    int
+        Satellite system ID (SYS_GPS, SYS_GLO, etc.) or SYS_NONE if invalid
+
+    Examples
+    --------
+    >>> sat2sys(1)  # GPS satellite 1
+    1  # SYS_GPS
+    >>> sat2sys(255)  # Invalid satellite
+    0  # SYS_NONE
     """
     from .satellite_numbering import SATELLITE_RANGES
 
@@ -172,29 +208,61 @@ def sat2sys(sat):
     return SYS_NONE
 
 def sat2prn(sat):
-    """Get PRN number from satellite number
+    """Get PRN number from satellite number.
 
-    Uses unified satellite numbering from satellite_numbering.py
+    Converts internal satellite numbering to the standard PRN (Pseudo-Random Noise)
+    number used to identify satellites within their constellation.
+
+    Parameters
+    ----------
+    sat : int
+        Satellite number (internal numbering system)
+
+    Returns
+    -------
+    int
+        PRN number within the satellite's constellation, or 0 if invalid
+
+    Notes
+    -----
+    Uses unified satellite numbering from satellite_numbering.py for conversion.
+
+    Examples
+    --------
+    >>> sat2prn(1)  # GPS satellite 1
+    1  # GPS PRN 1
+    >>> sat2prn(33)  # GLONASS satellite
+    1  # GLONASS slot number 1
     """
     from .satellite_numbering import sat_to_prn
     return sat_to_prn(sat)
 
 def prn2sat(prn, sys):
-    """Get satellite number from PRN and system
+    """Get satellite number from PRN and system.
 
-    Uses unified satellite numbering from satellite_numbering.py
+    Converts PRN number and satellite system to internal satellite numbering.
+    Uses unified satellite numbering from satellite_numbering.py.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     prn : int
-        PRN number
+        PRN number within the satellite constellation
     sys : int
-        Satellite system (SYS_GPS, SYS_GLO, etc.)
+        Satellite system (SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, etc.)
 
-    Returns:
-    --------
+    Returns
+    -------
     int
-        Satellite number
+        Internal satellite number, or 0 if invalid PRN/system combination
+
+    Examples
+    --------
+    >>> prn2sat(1, SYS_GPS)
+    1  # GPS satellite 1
+    >>> prn2sat(1, SYS_GLO)
+    33  # GLONASS satellite 1 (internal numbering)
+    >>> prn2sat(999, SYS_GPS)
+    0  # Invalid PRN
     """
     from .satellite_numbering import SYS_TO_CHAR, prn_to_sat
 
@@ -206,7 +274,28 @@ def prn2sat(prn, sys):
     return prn_to_sat(sys_char, prn)
 
 def sys2char(sys):
-    """Convert system ID to character"""
+    """Convert satellite system ID to single character identifier.
+
+    Parameters
+    ----------
+    sys : int
+        Satellite system ID (SYS_GPS, SYS_GLO, etc.)
+
+    Returns
+    -------
+    str
+        Single character system identifier ('G', 'R', 'E', 'C', 'J', 'S', 'I')
+        or ' ' for unknown systems
+
+    Examples
+    --------
+    >>> sys2char(SYS_GPS)
+    'G'
+    >>> sys2char(SYS_GLO)
+    'R'
+    >>> sys2char(999)
+    ' '
+    """
     syschar = {
         SYS_GPS: 'G',
         SYS_GLO: 'R',
@@ -219,7 +308,28 @@ def sys2char(sys):
     return syschar.get(sys, ' ')
 
 def char2sys(c):
-    """Convert character to system ID"""
+    """Convert single character identifier to satellite system ID.
+
+    Parameters
+    ----------
+    c : str
+        Single character system identifier ('G', 'R', 'E', 'C', 'J', 'S', 'I')
+        Case insensitive
+
+    Returns
+    -------
+    int
+        Satellite system ID (SYS_GPS, SYS_GLO, etc.) or 0 for unknown characters
+
+    Examples
+    --------
+    >>> char2sys('G')
+    1  # SYS_GPS
+    >>> char2sys('r')  # Case insensitive
+    2  # SYS_GLO
+    >>> char2sys('X')
+    0  # Unknown system
+    """
     charmap = {
         'G': SYS_GPS,
         'R': SYS_GLO,

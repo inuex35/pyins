@@ -14,7 +14,33 @@
 # limitations under the License.
 
 """
-Elevation angle computation for GNSS satellites
+Elevation angle computation for GNSS satellites.
+
+This module provides functionality to compute satellite elevation angles for Global
+Navigation Satellite System (GNSS) applications. The elevation angle is a critical
+parameter in GNSS processing as it affects signal quality, multipath effects, and
+positioning accuracy.
+
+The primary function compute_elevation_angle() calculates the elevation angle of a
+satellite as observed from a receiver position, taking into account the Earth's
+curvature through coordinate transformations from ECEF to local ENU frame.
+
+Functions
+---------
+compute_elevation_angle : function
+    Compute the elevation angle of a GNSS satellite as observed from a receiver.
+
+Notes
+-----
+Elevation angles are commonly used in GNSS processing for:
+- Satellite visibility determination
+- Signal quality assessment
+- Multipath mitigation
+- Tropospheric delay modeling
+- Satellite geometry analysis (DOP computation)
+
+Typical elevation mask angles range from 5° to 15° depending on the application
+and environment.
 """
 
 import numpy as np
@@ -24,21 +50,54 @@ from ..coordinate.transforms import ecef2enu
 
 def compute_elevation_angle(sat_pos: np.ndarray, rcv_pos: np.ndarray, reference_llh: np.ndarray) -> float:
     """
-    Compute satellite elevation angle
+    Compute the elevation angle of a GNSS satellite as observed from a receiver.
 
-    Parameters:
-    -----------
+    The elevation angle is the angle between the horizontal plane and the line-of-sight
+    vector from the receiver to the satellite. This function transforms the satellite
+    and receiver positions from ECEF coordinates to a local East-North-Up (ENU)
+    coordinate frame to compute the elevation angle.
+
+    Parameters
+    ----------
     sat_pos : np.ndarray
-        Satellite position in ECEF
+        Satellite position in Earth-Centered Earth-Fixed (ECEF) coordinates [m].
+        Expected shape: (3,) for [x, y, z] coordinates.
     rcv_pos : np.ndarray
-        Receiver position in ECEF
+        Receiver position in Earth-Centered Earth-Fixed (ECEF) coordinates [m].
+        Expected shape: (3,) for [x, y, z] coordinates.
     reference_llh : np.ndarray
-        Reference position in [lat(deg), lon(deg), height(m)] for local frame
+        Reference position for the local coordinate frame in [latitude, longitude, height].
+        Expected shape: (3,) where:
+        - latitude in degrees
+        - longitude in degrees
+        - height in meters above ellipsoid
 
-    Returns:
-    --------
+    Returns
+    -------
     float
-        Elevation angle in degrees
+        Elevation angle in degrees. Range: [-90, 90] where:
+        - 90° indicates the satellite is directly overhead (zenith)
+        - 0° indicates the satellite is on the horizon
+        - Negative values indicate the satellite is below the horizon
+
+    Notes
+    -----
+    The elevation angle is computed using the following steps:
+    1. Calculate the line-of-sight vector from receiver to satellite in ECEF
+    2. Transform this vector to local East-North-Up (ENU) coordinates
+    3. Compute the elevation as arctan2(up_component, horizontal_distance)
+
+    The reference position is used to define the local coordinate frame origin
+    and should typically be the receiver position in geodetic coordinates.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> sat_pos = np.array([20000000, 10000000, 15000000])  # ECEF [m]
+    >>> rcv_pos = np.array([4000000, 3000000, 5000000])     # ECEF [m]
+    >>> ref_llh = np.array([35.0, 139.0, 100.0])           # [deg, deg, m]
+    >>> elevation = compute_elevation_angle(sat_pos, rcv_pos, ref_llh)
+    >>> print(f"Elevation angle: {elevation:.2f}°")
     """
     # Convert LLH from degrees to radians for ecef2enu
     reference_llh_rad = np.array([

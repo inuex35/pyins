@@ -252,30 +252,54 @@ ROBUST_STATS = {
 
 def compute_obs_variance(elevation, snr=0.0, baseline=0.0, is_phase=True, freq_idx=0,
                          err=None, eratio=None):
-    """
-    Compute observation variance using RTKLIB error model
-    
+    """Compute observation variance using RTKLIB-compatible error model.
+
+    Calculates the expected variance of GNSS observations based on satellite
+    elevation, signal strength, baseline length, and observation type using
+    the error model from RTKLIB.
+
     Parameters
     ----------
     elevation : float
-        Satellite elevation angle (radians)
-    snr : float
-        Signal-to-noise ratio (dB-Hz)
-    baseline : float
-        Baseline length (m)
-    is_phase : bool
-        True for carrier phase, False for pseudorange
-    freq_idx : int
-        Frequency index (0=L1, 1=L2, 2=L5)
-    err : list
-        Observation error terms (default: DEFAULT_ERR)
-    eratio : list
-        Code/phase error ratios (default: DEFAULT_ERATIO)
-        
+        Satellite elevation angle in radians (0 to π/2)
+    snr : float, optional
+        Signal-to-noise ratio in dB-Hz, default 0.0 (ignored if 0)
+    baseline : float, optional
+        Baseline length in meters, default 0.0 (ignored if 0)
+    is_phase : bool, optional
+        True for carrier phase observations, False for pseudorange, default True
+    freq_idx : int, optional
+        Frequency band index (0=L1/E1/B1, 1=L2/E5b/B3, 2=L5/E5a/B2a), default 0
+    err : list, optional
+        Observation error model parameters, default DEFAULT_ERR
+        Format: [reserved, constant, elevation, baseline, doppler, snr_max, snr, rcv_std]
+    eratio : list, optional
+        Code-to-phase error ratios for each frequency, default DEFAULT_ERATIO
+
     Returns
     -------
     float
-        Observation variance (m²)
+        Observation variance in m²
+
+    Notes
+    -----
+    The error model combines several components:
+    - Constant error term
+    - Elevation-dependent error (1/sin(elevation))
+    - Baseline-dependent error (proportional to baseline length)
+    - SNR-dependent error (when SNR is below threshold)
+    - Code/phase scaling factor
+
+    The total standard deviation is then squared to get variance.
+
+    Examples
+    --------
+    >>> # Carrier phase variance at 30° elevation
+    >>> var_phase = compute_obs_variance(np.pi/6, is_phase=True)
+    >>> std_phase = np.sqrt(var_phase)  # Standard deviation in meters
+
+    >>> # Pseudorange variance with SNR and baseline effects
+    >>> var_code = compute_obs_variance(np.pi/4, snr=45.0, baseline=1000.0, is_phase=False)
     """
     if err is None:
         err = DEFAULT_ERR
@@ -304,20 +328,47 @@ def compute_obs_variance(elevation, snr=0.0, baseline=0.0, is_phase=True, freq_i
     return sigma ** 2
 
 def get_process_noise(dt, prn=None):
-    """
-    Get process noise values for Kalman filter
-    
+    """Get process noise values for Kalman filter state propagation.
+
+    Calculates the process noise (Q matrix diagonal elements) for different
+    state variables in RTK/PPP processing based on time interval and noise
+    spectral densities.
+
     Parameters
     ----------
     dt : float
-        Time interval (seconds)
-    prn : list
-        Process noise values (default: DEFAULT_PRN)
-        
+        Time interval since last update in seconds (must be positive)
+    prn : list, optional
+        Process noise spectral densities, default DEFAULT_PRN
+        Format: [bias, ionosphere, troposphere, acc_h, acc_v, position]
+        Units: [cycles/√s, m/√s, m/√s, m/s²/√s, m/s²/√s, m/√s]
+
     Returns
     -------
     dict
-        Process noise values for different states
+        Process noise variances for different state types with keys:
+        - 'ambiguity': Ambiguity bias process noise (cycles²)
+        - 'ionosphere': Ionospheric delay process noise (m²)
+        - 'troposphere': Tropospheric delay process noise (m²)
+        - 'acc_horizontal': Horizontal acceleration process noise (m²/s⁴)
+        - 'acc_vertical': Vertical acceleration process noise (m²/s⁴)
+        - 'position': Position process noise (m²), 0 if disabled
+
+    Notes
+    -----
+    Process noise is computed as (spectral_density * √dt)² to convert from
+    continuous-time to discrete-time form. The resulting values are used
+    as diagonal elements in the Kalman filter Q matrix.
+
+    Examples
+    --------
+    >>> # Get process noise for 1-second interval
+    >>> Q_values = get_process_noise(1.0)
+    >>> amb_std = np.sqrt(Q_values['ambiguity'])  # Ambiguity noise std
+
+    >>> # Custom process noise for high-dynamic applications
+    >>> custom_prn = [1e-4, 1e-3, 1e-4, 5.0, 5.0, 0.0]
+    >>> Q_values = get_process_noise(0.5, prn=custom_prn)
     """
     if prn is None:
         prn = DEFAULT_PRN
@@ -332,22 +383,41 @@ def get_process_noise(dt, prn=None):
     }
 
 def validate_innovation(innovation, is_phase=True, maxinno=None):
-    """
-    Check if innovation is within acceptable range
-    
+    """Check if measurement innovation is within acceptable range.
+
+    Validates Kalman filter innovations (observation minus prediction) against
+    threshold values to detect outliers and maintain filter stability.
+
     Parameters
     ----------
     innovation : float
-        Innovation value (m)
-    is_phase : bool
-        True for carrier phase, False for pseudorange
-    maxinno : list
-        Max innovation thresholds (default: DEFAULT_MAXINNO)
-        
+        Innovation (residual) value in meters
+    is_phase : bool, optional
+        True for carrier phase innovations, False for pseudorange, default True
+    maxinno : list, optional
+        Maximum innovation thresholds [phase_max, code_max] in meters,
+        default DEFAULT_MAXINNO
+
     Returns
     -------
     bool
-        True if innovation is acceptable
+        True if innovation passes validation test, False if it's an outlier
+
+    Notes
+    -----
+    Different thresholds are applied for phase and code observations since
+    carrier phase measurements are typically much more precise. Innovations
+    exceeding the threshold may indicate cycle slips, multipath, or other
+    measurement errors.
+
+    Examples
+    --------
+    >>> # Validate carrier phase innovation
+    >>> is_valid = validate_innovation(0.05, is_phase=True)  # 5cm phase innovation
+
+    >>> # Validate pseudorange innovation with custom thresholds
+    >>> custom_limits = [10.0, 50.0]  # 10m phase, 50m code max
+    >>> is_valid = validate_innovation(15.0, is_phase=False, maxinno=custom_limits)
     """
     if maxinno is None:
         maxinno = DEFAULT_MAXINNO
@@ -356,37 +426,82 @@ def validate_innovation(innovation, is_phase=True, maxinno=None):
     return abs(innovation) < threshold
 
 def check_ratio_test(ratio, threshold=THRESAR_RATIO):
-    """
-    Check if ratio test passes for ambiguity resolution
-    
+    """Check if ratio test passes for RTK ambiguity resolution.
+
+    The ratio test compares the second-best integer solution to the best solution
+    to ensure sufficient confidence in ambiguity fixing. A higher ratio indicates
+    better separation between candidate solutions.
+
     Parameters
     ----------
     ratio : float
-        Ratio test value
-    threshold : float
-        Ratio threshold (default: THRESAR_RATIO)
-        
+        Ratio test statistic (σ₂²/σ₁² where σ₁² < σ₂² are the two best solution costs)
+    threshold : float, optional
+        Minimum ratio threshold for accepting fixed solution, default THRESAR_RATIO (3.0)
+
     Returns
     -------
     bool
-        True if ratio test passes
+        True if ratio test passes (ratio ≥ threshold), False otherwise
+
+    Notes
+    -----
+    The ratio test is a critical quality check in RTK processing. A ratio that is
+    too low suggests ambiguous integer solutions and the float solution should be
+    used instead. Typical threshold values range from 2.0 to 3.0.
+
+    References
+    ----------
+    Teunissen, P.J.G. (1995). The least-squares ambiguity decorrelation adjustment:
+    a method for fast GPS integer ambiguity estimation.
+
+    Examples
+    --------
+    >>> # Good ambiguity resolution (high ratio)
+    >>> passes = check_ratio_test(4.5)  # Should return True
+
+    >>> # Poor ambiguity resolution (low ratio)
+    >>> passes = check_ratio_test(1.8)  # Should return False
+
+    >>> # Custom threshold for conservative processing
+    >>> passes = check_ratio_test(2.8, threshold=3.5)
     """
     return ratio >= threshold
 
 def check_time_sync(time_diff, max_diff=MAXTDIFF):
-    """
-    Check if time difference is acceptable
-    
+    """Check if time synchronization between measurements is acceptable.
+
+    Validates time synchronization between rover and base station measurements
+    or between different observation epochs to ensure proper differential processing.
+
     Parameters
     ----------
     time_diff : float
-        Time difference between measurements (seconds)
-    max_diff : float
-        Maximum allowed difference (default: MAXTDIFF)
-        
+        Time difference between measurements in seconds (can be positive or negative)
+    max_diff : float, optional
+        Maximum allowed time difference in seconds, default MAXTDIFF (3.0)
+
     Returns
     -------
     bool
-        True if time sync is acceptable
+        True if time synchronization is acceptable, False otherwise
+
+    Notes
+    -----
+    Time synchronization is critical for differential GNSS processing. Large time
+    differences can introduce errors due to satellite motion, atmospheric changes,
+    and receiver clock variations. The threshold should be set based on the
+    application requirements and baseline length.
+
+    Examples
+    --------
+    >>> # Good time sync (within 1 second)
+    >>> is_synced = check_time_sync(0.5)  # Should return True
+
+    >>> # Poor time sync (5 seconds apart)
+    >>> is_synced = check_time_sync(5.0)  # Should return False
+
+    >>> # Custom threshold for high-rate processing
+    >>> is_synced = check_time_sync(0.2, max_diff=0.5)  # 0.5s threshold
     """
     return abs(time_diff) <= max_diff

@@ -131,7 +131,46 @@ SIGNAL_PRIORITY_MAP = {
 
 
 class RinexObsReader:
-    """RINEX observation file reader using gnsspy with RTKLIB signal code support"""
+    """RINEX observation file reader with RTKLIB-compatible signal code support.
+
+    This class provides functionality to read RINEX observation files using
+    the gnsspy library with priority-based signal selection that matches
+    RTKLIB's behavior. It supports multiple GNSS constellations and handles
+    various RINEX 3 observation codes with proper frequency mapping.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the RINEX observation file
+    max_frequencies : int, default 5
+        Maximum number of frequencies to process per satellite
+
+    Attributes
+    ----------
+    filename : str
+        Path to the observation file
+    header : dict
+        RINEX header information including approximate position
+    observations : list
+        List of processed observation epochs
+    max_frequencies : int
+        Maximum number of frequencies supported
+    approx_position : np.ndarray or None
+        Approximate receiver position from RINEX header [X, Y, Z] in meters
+
+    Notes
+    -----
+    Supported GNSS systems:
+    - GPS (G): L1, L2, L5 frequencies
+    - Galileo (E): E1, E5a, E5b, E5ab, E6 frequencies
+    - BeiDou (C): B1, B2a, B2b, B3, B2ab frequencies
+    - GLONASS (R): G1, G2, G3 frequencies
+    - QZSS (J): L1, L2, L5, L6 frequencies
+    - IRNSS (I): L5, S frequencies
+    - SBAS (S): L1, L5 frequencies
+
+    The reader implements priority-based signal selection where higher priority
+    signals are preferred when multiple signals are available on the same frequency."""
 
     def __init__(self, filename: str, max_frequencies: int = 5):
         self.filename = filename
@@ -141,7 +180,40 @@ class RinexObsReader:
         self.approx_position = None  # Store APPROX POSITION XYZ from header
 
     def read(self) -> list[dict]:
-        """Read RINEX observation file"""
+        """Read and parse RINEX observation file.
+
+        This method reads a RINEX observation file and converts it into
+        a standardized format with proper time handling and satellite
+        numbering. It extracts GNSS observations for all available
+        satellites and frequencies.
+
+        Returns
+        -------
+        list[dict]
+            List of observation epochs, where each epoch contains:
+            - time: Unix timestamp (seconds)
+            - gps_time: GPS seconds since GPS epoch
+            - gps_week: GPS week number
+            - gps_tow: Time of week in seconds
+            - n_sats: Number of satellites observed in this epoch
+            - observations: List of Observation objects for each satellite
+
+        Raises
+        ------
+        ImportError
+            If gnsspy library is not available
+        FileNotFoundError
+            If the specified RINEX file doesn't exist
+        Exception
+            If there are errors parsing the RINEX file
+
+        Notes
+        -----
+        The method automatically handles:
+        - Time system conversions (UTC to GPS time)
+        - Satellite numbering conversion to internal format
+        - Signal priority selection based on RTKLIB compatibility
+        - Header information extraction including approximate position"""
         logger.info(f"Reading RINEX observation file: {self.filename}")
 
         if GNSSPY_AVAILABLE:
@@ -524,14 +596,83 @@ class RinexObsReader:
 
 
 class RinexNavReader:
-    """RINEX navigation file reader"""
+    """RINEX navigation file reader for satellite ephemeris data.
+
+    This class reads RINEX navigation files containing satellite ephemeris
+    data for various GNSS constellations. It handles both regular Keplerian
+    ephemerides and GLONASS ephemerides with proper time system conversions.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the RINEX navigation file
+
+    Attributes
+    ----------
+    filename : str
+        Path to the navigation file
+    nav_data : NavigationData
+        Container for all parsed ephemeris data
+
+    Notes
+    -----
+    Supported satellite systems:
+    - GPS: Standard Keplerian ephemeris
+    - Galileo: Standard Keplerian ephemeris
+    - BeiDou: Standard Keplerian ephemeris with time system conversion
+    - QZSS: Standard Keplerian ephemeris
+    - GLONASS: Special format with position/velocity/acceleration
+
+    The reader automatically handles:
+    - Time system conversions (BDT to GPS time)
+    - GLONASS time adjustments and leap second corrections
+    - Satellite health and accuracy indicators
+    - Proper orbital parameter extraction"""
 
     def __init__(self, filename: str):
         self.filename = filename
         self.nav_data = NavigationData()
 
     def read(self) -> NavigationData:
-        """Read RINEX navigation file"""
+        """Read and parse RINEX navigation file to extract satellite ephemeris data.
+
+        This method reads a RINEX navigation file and extracts satellite
+        ephemeris data for all available GNSS constellations. It handles
+        different ephemeris formats and performs necessary time system
+        conversions.
+
+        Returns
+        -------
+        NavigationData
+            Container object with parsed ephemeris data including:
+            - eph: List of standard Keplerian ephemerides (GPS, Galileo, BeiDou, QZSS)
+            - geph: List of GLONASS ephemerides (position/velocity format)
+            Both lists are sorted by time of ephemeris for efficient access.
+
+        Raises
+        ------
+        ValueError
+            If no navigation filename is provided
+        ImportError
+            If gnsspy library is not available
+        Exception
+            If there are errors parsing the navigation file
+
+        Notes
+        -----
+        The method automatically handles:
+        - Keplerian orbital parameters extraction
+        - GLONASS position/velocity/acceleration data processing
+        - Time system conversions (especially for BeiDou and GLONASS)
+        - Satellite health and accuracy indicators
+        - Clock correction parameters (f0, f1, f2)
+        - Group delay corrections (TGD)
+
+        For GLONASS satellites:
+        - Times are converted from Moscow time to GPS time
+        - Position data is converted from km to meters
+        - Velocity data is converted from km/s to m/s
+        - Acceleration data is converted from km/s² to m/s²"""
         if not self.filename:
             raise ValueError("No navigation filename provided")
 

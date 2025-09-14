@@ -100,7 +100,31 @@ class IMUReader:
 
     def _convert_time_system(self, df: pd.DataFrame, from_system: str, to_system: str) -> pd.DataFrame:
         """
-        Convert time between different time systems
+        Convert time between different time systems.
+
+        This method handles conversion between UNIX time and GPS time systems.
+        GPS time starts at January 6, 1980, while UNIX time starts at
+        January 1, 1970. The conversion also accounts for leap seconds.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame containing IMU data with time column
+        from_system : str
+            Source time system ('unix' or 'gps')
+        to_system : str
+            Target time system ('unix' or 'gps')
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with converted time column
+
+        Notes
+        -----
+        - GPS to UNIX offset is 315964800 seconds
+        - Leap seconds are accounted for (17 seconds as of 2015)
+        - If from_system equals to_system, returns original DataFrame
         """
         if from_system == to_system:
             return df
@@ -116,15 +140,47 @@ class IMUReader:
             df['time'] = df['time'] + self.GPS_TO_UNIX_OFFSET - self.LEAP_SECONDS_2015
             self.logger.info(f"Converted time from GPS to UNIX (offset: {self.GPS_TO_UNIX_OFFSET - self.LEAP_SECONDS_2015})")
 
-        if self.format == 'csv':
-            return df
-        elif self.format == 'txt':
-            return self._read_txt(start_time, duration)
-        else:
-            raise ValueError(f"Unsupported IMU file format: {self.format}")
+        return df
 
     def _read_csv(self, start_time: Optional[float] = None, duration: Optional[float] = None) -> pd.DataFrame:
-        """Read IMU data from CSV file"""
+        """
+        Read IMU data from CSV file with automatic column mapping.
+
+        This method reads IMU data from CSV files and handles various column
+        naming conventions. It automatically maps common alternative names
+        to the standard format expected by the pyins library.
+
+        Parameters
+        ----------
+        start_time : float, optional
+            Start time to filter data (not used in this implementation,
+            filtering is done after reading)
+        duration : float, optional
+            Duration in seconds (not used in this implementation,
+            filtering is done after reading)
+
+        Returns
+        -------
+        pd.DataFrame
+            IMU data with standardized columns:
+            - time: timestamp
+            - accel_x, accel_y, accel_z: acceleration in m/s²
+            - gyro_x, gyro_y, gyro_z: angular velocity in rad/s
+
+        Raises
+        ------
+        ValueError
+            If required IMU columns are missing after column mapping
+
+        Notes
+        -----
+        Supported alternative column names:
+        - timestamp -> time
+        - ax, ay, az -> accel_x, accel_y, accel_z
+        - acc_x, acc_y, acc_z -> accel_x, accel_y, accel_z
+        - gx, gy, gz -> gyro_x, gyro_y, gyro_z
+        - wx, wy, wz -> gyro_x, gyro_y, gyro_z
+        """
         self.logger.info(f"Reading IMU data from CSV: {self.file_path}")
 
         # Load IMU data
@@ -154,7 +210,43 @@ class IMUReader:
         return self._apply_filters(imu_data, start_time, duration)
 
     def _read_txt(self, start_time: Optional[float] = None, duration: Optional[float] = None) -> pd.DataFrame:
-        """Read IMU data from text file (space-separated format)"""
+        """
+        Read IMU data from text file with space-separated values.
+
+        This method reads IMU data from text files where values are
+        separated by whitespace. The expected format is fixed-column
+        with 7 values per line.
+
+        Parameters
+        ----------
+        start_time : float, optional
+            Start time to filter data (not used in this implementation,
+            filtering is done after reading)
+        duration : float, optional
+            Duration in seconds (not used in this implementation,
+            filtering is done after reading)
+
+        Returns
+        -------
+        pd.DataFrame
+            IMU data with columns:
+            - time: timestamp
+            - accel_x, accel_y, accel_z: acceleration in m/s²
+            - gyro_x, gyro_y, gyro_z: angular velocity in rad/s
+
+        Raises
+        ------
+        ValueError
+            If the text file cannot be parsed or has invalid format
+
+        Notes
+        -----
+        Expected text file format:
+        time accel_x accel_y accel_z gyro_x gyro_y gyro_z
+
+        Lines starting with '#' are treated as comments and skipped.
+        Multiple whitespace characters are treated as single separator.
+        """
         self.logger.info(f"Reading IMU data from TXT: {self.file_path}")
 
         # Read text file with space-separated values
@@ -173,7 +265,35 @@ class IMUReader:
         return self._apply_filters(imu_data, start_time, duration)
 
     def _apply_filters(self, imu_data: pd.DataFrame, start_time: Optional[float], duration: Optional[float]) -> pd.DataFrame:
-        """Apply time filters and sort data"""
+        """
+        Apply time filters and sort IMU data chronologically.
+
+        This method filters the IMU data by time range and sorts it
+        chronologically. It also provides logging information about
+        the loaded data including statistics.
+
+        Parameters
+        ----------
+        imu_data : pd.DataFrame
+            Raw IMU data to filter and sort
+        start_time : float, optional
+            Start time for filtering. If None, no start time filter is applied
+        duration : float, optional
+            Duration in seconds. If provided with start_time, data is filtered
+            to start_time + duration. Ignored if start_time is None
+
+        Returns
+        -------
+        pd.DataFrame
+            Filtered and sorted IMU data
+
+        Notes
+        -----
+        The method logs information about:
+        - Number of loaded samples
+        - Time range of the data
+        - Estimated sampling rate based on median time difference
+        """
         # Apply time filter if requested
         if start_time is not None:
             imu_data = imu_data[imu_data['time'] >= start_time]

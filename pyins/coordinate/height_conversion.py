@@ -29,15 +29,52 @@ import numpy as np
 
 
 class HeightSystem(Enum):
-    """Height system enumeration."""
+    """Enumeration of supported height systems
+
+    Defines the different height reference systems used in geodetic
+    and navigation applications.
+
+    Attributes
+    ----------
+    ELLIPSOIDAL : str
+        Height above the reference ellipsoid (WGS84)
+        Also known as geodetic height or GPS height
+    ORTHOMETRIC : str
+        Height above the geoid (mean sea level)
+        Also known as sea level height or MSL height
+
+    Examples
+    --------
+    >>> print(HeightSystem.ELLIPSOIDAL.value)  # 'ellipsoidal'
+    >>> print(HeightSystem.ORTHOMETRIC.value)  # 'orthometric'
+    """
     ELLIPSOIDAL = "ellipsoidal"  # Height above WGS84 ellipsoid
     ORTHOMETRIC = "orthometric"  # Height above geoid (MSL)
 
 
 class EGM96:
-    """
-    Simple EGM96 geoid model implementation.
-    This is a simplified version - for production use, consider using pygeodesy or similar.
+    """Simple EGM96 geoid model implementation
+
+    Provides geoid height calculations using a simplified approximation
+    of the EGM96 (Earth Gravitational Model 1996) geoid model.
+
+    Notes
+    -----
+    This is a simplified implementation for demonstration purposes.
+    For production applications requiring high accuracy, consider using
+    dedicated geoid libraries like pygeodesy or PROJ.
+
+    The implementation provides rough approximations based on geographic
+    regions and should not be used for high-precision applications.
+
+    Attributes
+    ----------
+    _grid_resolution : float
+        Grid resolution in degrees (not used in current implementation)
+    _lat_range : tuple
+        Latitude range in degrees (-90, 90)
+    _lon_range : tuple
+        Longitude range in degrees (-180, 180)
     """
 
     def __init__(self):
@@ -48,15 +85,38 @@ class EGM96:
         self._lon_range = (-180, 180)
 
     def get_geoid_height(self, lat: float, lon: float) -> float:
-        """
-        Get geoid height (N) at given location.
+        """Get geoid height (N) at specified location
 
-        Args:
-            lat: Latitude in degrees
-            lon: Longitude in degrees
+        Computes the height of the geoid above the WGS84 ellipsoid
+        at the given geographic coordinates using regional approximations.
 
-        Returns:
-            Geoid height in meters (geoid above ellipsoid)
+        Parameters
+        ----------
+        lat : float
+            Latitude in degrees (-90 to 90)
+        lon : float
+            Longitude in degrees (-180 to 180)
+
+        Returns
+        -------
+        float
+            Geoid height in meters (positive when geoid is above ellipsoid)
+
+        Notes
+        -----
+        This implementation uses very rough approximations:
+        - Japan region (30-45°N, 130-145°E): ~-35m with small variations
+        - California region (30-42°N, 125-115°W): ~-30m with small variations
+        - Global: ~-30m + latitude-dependent variation
+
+        These values are order-of-magnitude estimates only and should not
+        be used for precise applications.
+
+        Examples
+        --------
+        >>> egm96 = EGM96()
+        >>> N_tokyo = egm96.get_geoid_height(35.6762, 139.6503)  # Tokyo
+        >>> print(f"Geoid height in Tokyo: {N_tokyo:.1f} m")
         """
         # Simplified geoid model - returns approximate values
         # For Japan/California area, geoid heights are typically -30 to -40m
@@ -85,17 +145,45 @@ def ellipsoidal_to_orthometric(
     lon: Union[float, np.ndarray],
     geoid_model: str = "EGM96"
 ) -> Union[float, np.ndarray]:
-    """
-    Convert ellipsoidal height to orthometric height.
+    """Convert ellipsoidal height to orthometric height
 
-    Args:
-        h_ellipsoidal: Ellipsoidal height(s) in meters
-        lat: Latitude(s) in degrees
-        lon: Longitude(s) in degrees
-        geoid_model: Geoid model to use (currently only "EGM96" supported)
+    Transforms height above the WGS84 ellipsoid to height above mean sea level
+    (geoid) using the specified geoid model.
 
-    Returns:
-        Orthometric height(s) in meters
+    Parameters
+    ----------
+    h_ellipsoidal : float or np.ndarray
+        Ellipsoidal height(s) in meters (height above WGS84 ellipsoid)
+    lat : float or np.ndarray
+        Latitude(s) in degrees (-90 to 90)
+    lon : float or np.ndarray
+        Longitude(s) in degrees (-180 to 180)
+    geoid_model : str, optional
+        Geoid model to use, by default "EGM96"
+        Currently only "EGM96" is supported
+
+    Returns
+    -------
+    float or np.ndarray
+        Orthometric height(s) in meters (height above geoid/MSL)
+
+    Raises
+    ------
+    ValueError
+        If an unsupported geoid model is specified
+
+    Notes
+    -----
+    The relationship is: H = h - N
+    where H is orthometric height, h is ellipsoidal height, and N is geoid height.
+
+    Examples
+    --------
+    >>> # Convert GPS height to sea level height
+    >>> gps_height = 150.0  # meters above WGS84 ellipsoid
+    >>> lat, lon = 35.0, 139.0  # degrees
+    >>> msl_height = ellipsoidal_to_orthometric(gps_height, lat, lon)
+    >>> print(f"Height above sea level: {msl_height:.1f} m")
     """
     if geoid_model != "EGM96":
         raise ValueError(f"Unsupported geoid model: {geoid_model}")
@@ -174,19 +262,52 @@ def convert_height(
     to_system: HeightSystem,
     geoid_model: str = "EGM96"
 ) -> Union[float, np.ndarray]:
-    """
-    Convert height between different height systems.
+    """Convert height between different height systems
 
-    Args:
-        height: Height value(s) to convert
-        lat: Latitude(s) in degrees
-        lon: Longitude(s) in degrees
-        from_system: Source height system
-        to_system: Target height system
-        geoid_model: Geoid model to use
+    General-purpose function to convert heights between ellipsoidal and
+    orthometric height systems using the specified geoid model.
 
-    Returns:
-        Converted height value(s)
+    Parameters
+    ----------
+    height : float or np.ndarray
+        Height value(s) to convert in meters
+    lat : float or np.ndarray
+        Latitude(s) in degrees (-90 to 90)
+    lon : float or np.ndarray
+        Longitude(s) in degrees (-180 to 180)
+    from_system : HeightSystem
+        Source height system (HeightSystem.ELLIPSOIDAL or HeightSystem.ORTHOMETRIC)
+    to_system : HeightSystem
+        Target height system (HeightSystem.ELLIPSOIDAL or HeightSystem.ORTHOMETRIC)
+    geoid_model : str, optional
+        Geoid model to use for conversion, by default "EGM96"
+
+    Returns
+    -------
+    float or np.ndarray
+        Converted height value(s) in meters
+
+    Raises
+    ------
+    ValueError
+        If an unsupported conversion or geoid model is specified
+
+    Notes
+    -----
+    If from_system equals to_system, the input height is returned unchanged.
+    This function serves as a unified interface for all height conversions.
+
+    Examples
+    --------
+    >>> from pyins.coordinate import HeightSystem
+    >>> # Convert GPS height to orthometric height
+    >>> gps_height = 200.0
+    >>> lat, lon = 35.0, 139.0
+    >>> ortho_height = convert_height(
+    ...     gps_height, lat, lon,
+    ...     HeightSystem.ELLIPSOIDAL, HeightSystem.ORTHOMETRIC
+    ... )
+    >>> print(f"Orthometric height: {ortho_height:.1f} m")
     """
     if from_system == to_system:
         return height

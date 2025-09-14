@@ -141,10 +141,50 @@ def get_leap_seconds_at_date(dt: datetime) -> int:
 
 
 class TimeCore:
-    """Unified time representation for all GNSS and time systems
+    """Unified time representation for all GNSS and time systems.
 
-    This class internally stores time as GPS seconds and provides
-    conversions to all other formats.
+    This class provides a central time management system that internally stores
+    time as GPS seconds since the GPS epoch (1980-01-06) and offers conversions
+    to and from all major time formats and GNSS time systems.
+
+    The class handles:
+    - GPS time (week + TOW)
+    - BeiDou time (week + TOW)
+    - Galileo time (week + TOW)
+    - GLONASS time
+    - Unix timestamp
+    - UTC datetime
+    - Modified Julian Day (MJD)
+
+    All conversions properly account for leap seconds and system-specific
+    epoch differences.
+
+    Attributes
+    ----------
+    _gps_seconds : float
+        Internal time storage as GPS seconds since GPS epoch
+
+    Notes
+    -----
+    Time system relationships:
+    - GPS time does not include leap seconds
+    - BeiDou time is 14 seconds behind GPS time
+    - GLONASS time includes leap seconds and is Moscow time (UTC+3)
+    - Unix time includes leap seconds
+    - UTC includes leap seconds
+
+    Examples
+    --------
+    >>> # Create from GPS time
+    >>> t = TimeCore.from_gps(2200, 432000.0)  # Week 2200, Sunday noon
+
+    >>> # Convert to different formats
+    >>> unix_time = t.to_unix()
+    >>> utc_datetime = t.to_datetime()
+    >>> mjd = t.to_mjd()
+
+    >>> # Create from Unix timestamp
+    >>> t2 = TimeCore.from_unix(1640995200.0)  # 2022-01-01 00:00:00 UTC
     """
 
     def __init__(self, gps_seconds: float):

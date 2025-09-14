@@ -12,9 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ephemeris selection and satellite position computation
+"""Ephemeris selection and satellite position computation.
 
-Supports both RINEX broadcast ephemeris and SP3 precise ephemeris.
+This module provides comprehensive functionality for handling both broadcast
+ephemeris (from RINEX navigation files) and precise SP3 ephemeris data. It
+implements satellite position calculation, clock bias computation, and
+ephemeris selection algorithms following GNSS standards and RTKLIB conventions.
+
+Key Features:
+- Multi-constellation support (GPS, GLONASS, Galileo, BeiDou, QZSS)
+- Broadcast ephemeris processing with Kepler orbital elements
+- GLONASS-specific ephemeris handling with numerical integration
+- SP3 precise ephemeris interpolation
+- Relativistic corrections and Earth rotation effects
+- Robust ephemeris selection with time rollover handling
+- Iterative satellite clock and position calculation
+
+Time Systems:
+- GPS Time: Standard for GPS, Galileo, QZSS satellites
+- GLONASS Time: For GLONASS satellites (handled internally)
+- BeiDou Time (BDT): For BeiDou satellites (14s offset from GPS)
+- All outputs normalized to GPS Time system
+
+Ephemeris Types Supported:
+- GPS/QZSS: Standard Keplerian ephemeris
+- Galileo: Compatible with GPS format
+- BeiDou: Keplerian with GEO satellite special handling
+- GLONASS: Numerical integration of equations of motion
+
+Functions:
+    timediff: Handle time differences with week rollover
+    dtadjust: Adjust time differences for week boundaries
+    seleph: Select best ephemeris for satellite at given time
+    eph2clk: Calculate satellite clock bias from ephemeris
+    eph2pos: Compute satellite position from broadcast ephemeris
+    satpos: Compute positions for all satellites in observation
+    satpos_sp3: Compute positions using SP3 precise ephemeris
+    compute_satellite_position: Unified position computation interface
+
+Notes:
+    All position outputs are in ECEF coordinates (meters).
+    Clock biases are in seconds, normalized to GPS time system.
+    Variance outputs represent position uncertainty in m².
 """
 
 from typing import Optional, Union
@@ -26,9 +65,49 @@ from ..core.unified_time import TimeCore
 
 
 def timediff(t1, t2):
-    """Time difference in seconds handling week rollover
+    """Calculate time difference in seconds with proper week rollover handling.
 
-    Properly handles GPS time and time of week differences
+    Computes the difference between two GPS times, properly handling the weekly
+    rollover that occurs every 604,800 seconds (1 week). This is essential for
+    GNSS processing where times are often represented as Time of Week (TOW).
+
+    Parameters
+    ----------
+    t1 : float
+        First time in seconds. Can be either GPS seconds or Time of Week (TOW).
+        Values > 604800 are treated as full GPS time and converted to TOW.
+    t2 : float
+        Second time in seconds. Can be either GPS seconds or Time of Week (TOW).
+        Values > 604800 are treated as full GPS time and converted to TOW.
+
+    Returns
+    -------
+    float
+        Time difference (t1 - t2) in seconds, adjusted for week boundaries.
+        The result is normalized to the range [-302400, 302400] seconds
+        (±half week) to ensure the shortest time difference is returned.
+
+    Notes
+    -----
+    GPS weeks roll over every 604,800 seconds (7 days). This function ensures
+    that time differences across week boundaries are calculated correctly by:
+    1. Converting full GPS times to TOW if necessary
+    2. Computing the raw difference
+    3. Adjusting for week rollover if the difference exceeds ±half week
+
+    Examples
+    --------
+    >>> # Times within same week
+    >>> dt = timediff(100000, 50000)
+    >>> print(dt)  # 50000.0
+
+    >>> # Times across week boundary
+    >>> dt = timediff(10000, 590000)  # Near week rollover
+    >>> print(dt)  # Should be negative, adjusted for rollover
+
+    >>> # Full GPS times (automatically converted to TOW)
+    >>> dt = timediff(1234567890, 1234567800)
+    >>> print(dt)  # 90.0
     """
     # Convert both times to TOW if one is GPS time
     if t1 > 604800:
@@ -49,21 +128,53 @@ def timediff(t1, t2):
 
 
 def dtadjust(t1, t2, tw=604800):
-    """Calculate delta time considering week-rollover
+    """Calculate time difference with week rollover adjustment.
+
+    Computes the time difference between two GPS times with proper handling of
+    week boundaries. This function is commonly used in GNSS ephemeris processing
+    where accurate time differences are critical for position calculations.
 
     Parameters
     ----------
     t1 : float
-        Time 1 (can be GPS seconds or time of week)
+        First time in seconds. Can be GPS seconds or Time of Week (TOW).
     t2 : float
-        Time 2 (can be GPS seconds or time of week)
-    tw : float
-        Week duration in seconds (default: 604800)
+        Second time in seconds. Can be GPS seconds or Time of Week (TOW).
+    tw : float, optional
+        Week duration in seconds. Default is 604800 (GPS week length).
+        Other values can be used for different time systems if needed.
 
     Returns
     -------
     float
-        Adjusted time difference
+        Adjusted time difference (t1 - t2) in seconds, normalized to the range
+        [-tw/2, tw/2] to ensure the shortest possible time difference.
+
+    Notes
+    -----
+    This function builds upon timediff() by adding an additional adjustment
+    step to ensure the time difference falls within ±half the specified period.
+    This is particularly important for ephemeris validity checks and time
+    synchronization in GNSS processing.
+
+    The adjustment algorithm:
+    1. Calculate initial time difference using timediff()
+    2. If difference > tw/2, subtract tw
+    3. If difference < -tw/2, add tw
+
+    Examples
+    --------
+    >>> # Normal time difference within same week
+    >>> dt = dtadjust(100000, 50000)
+    >>> print(dt)  # 50000.0
+
+    >>> # Time difference across week boundary
+    >>> dt = dtadjust(50000, 550000)  # Should be adjusted
+    >>> print(dt)  # Will be adjusted to avoid large positive difference
+
+    >>> # Custom period (e.g., for testing)
+    >>> dt = dtadjust(350000, 50000, tw=300000)
+    >>> print(dt)  # Adjusted for 300000-second period
     """
     dt = timediff(t1, t2)
     if dt > tw / 2:
@@ -74,24 +185,70 @@ def dtadjust(t1, t2, tw=604800):
 
 
 def seleph(nav, t, sat):
-    """
-    Select ephemeris for satellite at given time
+    """Select the best ephemeris for a satellite at a given time.
 
-    Based on rtklib-py implementation
+    Searches through available broadcast ephemeris data to find the most
+    appropriate ephemeris for a specific satellite at a given time. The
+    selection algorithm minimizes the time difference between the requested
+    time and the ephemeris time of ephemeris (toe) or time of clock (toc).
 
     Parameters
     ----------
     nav : NavigationData
-        Navigation data containing ephemerides
+        Navigation data object containing ephemeris collections:
+        - nav.eph: GPS/Galileo/BeiDou/QZSS ephemerides
+        - nav.geph: GLONASS ephemerides
     t : float or TimeCore
-        Time of interest (GPS seconds or TimeCore)
+        Time of interest. Can be:
+        - TimeCore object with GPS time information
+        - Float representing GPS seconds (full GPS time)
+        - Float representing Time of Week (TOW < 604800)
     sat : int
-        Satellite number
+        Satellite number in the internal numbering system:
+        - GPS: 1-32, GLONASS: 65-96, Galileo: 301-336, etc.
 
     Returns
     -------
     Ephemeris or GloEphemeris or None
-        Best ephemeris for the satellite at given time
+        Best matching ephemeris for the satellite at the given time.
+        Returns None if no suitable ephemeris is found.
+        - For non-GLONASS: returns Ephemeris object
+        - For GLONASS: returns GloEphemeris object
+
+    Notes
+    -----
+    Selection Strategy:
+    - Non-GLONASS satellites: Uses Time of Week (TOW) for comparison
+    - GLONASS satellites: Uses full GPS time with preference for past ephemerides
+    - Ephemerides are assumed to be sorted by time in the navigation data
+    - Selection terminates early when time differences start increasing
+
+    Time Handling:
+    - GPS, Galileo, BeiDou, QZSS: Compared using TOW modulo 604800
+    - GLONASS: Compared using full GPS time with 1-hour penalty for future ephemerides
+    - BeiDou GEO satellites: Standard selection but may need special handling
+
+    Validity Thresholds:
+    - Standard satellites: Selects closest ephemeris by toe
+    - GLONASS: Prefers past ephemeris, adds penalty for future ones
+    - Maximum search continues until time differences increase consistently
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from pyins.core.unified_time import TimeCore
+    >>>
+    >>> # Select ephemeris using TimeCore
+    >>> time = TimeCore(gps_seconds=1234567890)
+    >>> eph = seleph(nav, time, sat=1)  # GPS satellite 1
+    >>>
+    >>> # Select ephemeris using TOW
+    >>> eph = seleph(nav, 345600.0, sat=65)  # GLONASS satellite
+    >>>
+    >>> # Check if ephemeris was found
+    >>> if eph is not None:
+    >>>     print(f"Found ephemeris for satellite {sat}")
+    >>>     print(f"Ephemeris toe: {eph.toe}")
     """
     dt_best = 1e10
     eph_best = None

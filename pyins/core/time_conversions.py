@@ -61,15 +61,25 @@ LEAPSECONDS_TABLE = [
 def ensure_utc_timezone(dt):
     """Ensure datetime has UTC timezone.
 
+    Converts naive datetime objects to UTC-aware or converts timezone-aware
+    datetime objects to UTC. This function ensures consistent timezone handling
+    throughout the time conversion system.
+
     Parameters
     ----------
     dt : datetime.datetime
-        Datetime object
+        Datetime object (timezone-aware or naive)
 
     Returns
     -------
     datetime.datetime
         Datetime with UTC timezone
+
+    Notes
+    -----
+    - Naive datetime objects are assumed to be in UTC
+    - Timezone-aware datetime objects are converted to UTC
+    - Already UTC datetime objects are returned unchanged
     """
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -81,15 +91,36 @@ def ensure_utc_timezone(dt):
 def get_leap_seconds(time_utc):
     """Get leap seconds at given UTC time.
 
+    Determines the number of leap seconds that have been inserted between
+    UTC and GPS time at the specified UTC time. GPS time does not include
+    leap seconds, so it runs ahead of UTC by the cumulative leap seconds.
+
     Parameters
     ----------
     time_utc : datetime.datetime
-        UTC time
+        UTC time (must be timezone-aware or assumed UTC)
 
     Returns
     -------
     int
         Number of leap seconds to add to UTC to get GPS time
+
+    Raises
+    ------
+    ValueError
+        If time is before GPS epoch (1980-01-06)
+
+    Notes
+    -----
+    The leap second table is maintained from the most recent to oldest.
+    As of 2025, there are 18 leap seconds total. This function must be
+    updated when new leap seconds are announced by IERS.
+
+    Examples
+    --------
+    >>> import datetime
+    >>> dt = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+    >>> leap_secs = get_leap_seconds(dt)  # Returns 18
     """
     time_utc = ensure_utc_timezone(time_utc)
 
