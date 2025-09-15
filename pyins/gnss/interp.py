@@ -21,60 +21,60 @@ Based on RTKLIB's interpobs() and syncobs() functions
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-# RTKLIBの定数
-DTTOL = 0.005  # 5ms: 厳密な時刻同期許容値（高レート用）
-DTTOL_LOWRATE = 0.025  # 25ms: 低レート（1Hz）用の許容値
-MAXDTOE = 7200.0  # 最大軌道情報時刻差
-FREQ_L1 = 1.57542e9  # L1周波数 (Hz)
-FREQ_L2 = 1.22760e9  # L2周波数 (Hz)
-FREQ_L5 = 1.17645e9  # L5周波数 (Hz)
-CLIGHT = 299792458.0  # 光速 (m/s)
-WAVELENGTH_L1 = CLIGHT / FREQ_L1  # L1波長
+# RTKLIB constants
+DTTOL = 0.005  # 5ms: strict time sync tolerance (for high rate)
+DTTOL_LOWRATE = 0.025  # 25ms: tolerance for low rate (1Hz)
+MAXDTOE = 7200.0  # maximum ephemeris time difference
+FREQ_L1 = 1.57542e9  # L1 frequency (Hz)
+FREQ_L2 = 1.22760e9  # L2 frequency (Hz)
+FREQ_L5 = 1.17645e9  # L5 frequency (Hz)
+CLIGHT = 299792458.0  # speed of light (m/s)
+WAVELENGTH_L1 = CLIGHT / FREQ_L1  # L1 wavelength
 
 
 def timediff(t1: float, t2: float) -> float:
-    """時刻差を計算（GPS週跨ぎを考慮）"""
+    """Calculate time difference (considering GPS week rollover)"""
     dt = t1 - t2
-    if dt > 302400.0:  # 3.5日以上の差
-        dt -= 604800.0  # 1週間引く
+    if dt > 302400.0:  # difference > 3.5 days
+        dt -= 604800.0  # subtract 1 week
     elif dt < -302400.0:
-        dt += 604800.0  # 1週間足す
+        dt += 604800.0  # add 1 week
     return dt
 
 
 def interp_pseudorange(pr1: float, pr2: float, t1: float, t2: float, t: float) -> float:
     """
-    擬似距離の線形補間（RTKLIBスタイル）
-    
+    Linear interpolation of pseudorange (RTKLIB style)
+
     Parameters:
     -----------
     pr1, pr2 : float
-        前後エポックの擬似距離 [m]
+        Pseudorange at previous and next epochs [m]
     t1, t2 : float
-        前後エポックの時刻 [s]
+        Time of previous and next epochs [s]
     t : float
-        補間対象時刻 [s]
-    
+        Target interpolation time [s]
+
     Returns:
     --------
-    float : 補間された擬似距離 [m]
+    float : Interpolated pseudorange [m]
     """
     if abs(t2 - t1) < 1e-9 or pr1 == 0 or pr2 == 0:
         return pr1
     
-    # 線形補間係数
+    # Linear interpolation coefficient
     alpha = (t - t1) / (t2 - t1)
-    
-    # 擬似距離の変化率を考慮
-    # RTKLIBでは衛星の運動による変化を考慮
+
+    # Consider pseudorange rate of change
+    # RTKLIB considers satellite motion
     pr_rate = (pr2 - pr1) / (t2 - t1)
-    
-    # 変化率が異常に大きい場合はクリップ（衛星速度の制限）
-    MAX_RANGE_RATE = 1000.0  # m/s (保守的な値)
+
+    # Clip if rate is abnormally large (satellite velocity limit)
+    MAX_RANGE_RATE = 1000.0  # m/s (conservative value)
     if abs(pr_rate) > MAX_RANGE_RATE:
         pr_rate = np.sign(pr_rate) * MAX_RANGE_RATE
-    
-    # 補間
+
+    # Interpolate
     pr_interp = pr1 + pr_rate * (t - t1)
     
     return pr_interp
@@ -83,25 +83,25 @@ def interp_pseudorange(pr1: float, pr2: float, t1: float, t2: float, t: float) -
 def interp_carrier_phase(L1: float, L2: float, D1: float, D2: float,
                         t1: float, t2: float, t: float, freq: float = FREQ_L1) -> float:
     """
-    搬送波位相の補間（ドップラー周波数を使用）
-    RTKLIBのinterpobs関数を模倣
+    Carrier phase interpolation (using Doppler frequency)
+    Mimics RTKLIB's interpobs function
 
     Parameters:
     -----------
     L1, L2 : float
-        前後エポックの搬送波位相 [cycle]
+        Carrier phase at previous and next epochs [cycle]
     D1, D2 : float
-        前後エポックのドップラー周波数 [Hz]
+        Doppler frequency at previous and next epochs [Hz]
     t1, t2 : float
-        前後エポックの時刻 [s]
+        Time of previous and next epochs [s]
     t : float
-        補間対象時刻 [s]
+        Target interpolation time [s]
     freq : float
-        搬送波周波数 [Hz]
+        Carrier frequency [Hz]
 
     Returns:
     --------
-    float : 補間された搬送波位相 [cycle]
+    float : Interpolated carrier phase [cycle]
     """
     if abs(t2 - t1) < 1e-9 or L1 == 0 or L2 == 0:
         return L1
@@ -109,66 +109,76 @@ def interp_carrier_phase(L1: float, L2: float, D1: float, D2: float,
     dt = t - t1
     dt_total = t2 - t1
 
-    # RTKLIBアプローチ: ドップラーを使った補間
-    # ドップラー周波数から位相変化を推定
+    # RTKLIB approach: interpolation using Doppler
+    # Estimate phase change from Doppler frequency
     if D1 != 0 and D2 != 0:
-        # 平均ドップラーを使用（より安定）
+        # Use average Doppler (more stable)
         D_avg = (D1 + D2) / 2.0
 
-        # 波長 = c / freq
+        # wavelength = c / freq
         wavelength = CLIGHT / freq
 
-        # ドップラーによる位相変化 [cycles]
-        # Doppler [Hz] * time [s] = phase change [cycles]
-        phase_change = D_avg * dt
+        # Phase change from Doppler [cycles]
+        # RTKLIB-py style: Doppler sign is opposite to phase rate
+        # Negative Doppler means satellite approaching (phase increasing)
+        phase_change = -D_avg * dt
 
-        # 補間された位相
+        # Interpolated phase
         L_interp = L1 + phase_change
     else:
-        # ドップラーが利用できない場合は線形補間
-        # ただし、位相のジャンプに注意
+        # Linear interpolation when Doppler not available
+        # For accumulated carrier phase, rate of change is relatively constant
         delta_L = L2 - L1
 
-        # 大きなジャンプ（サイクルスリップの可能性）をチェック
-        if abs(delta_L) > 100:  # 100サイクル以上のジャンプは異常
-            # 補間せずに最も近い観測値を使用
-            if abs(dt) < abs(t2 - t):
-                return L1
-            else:
-                return L2
+        # Correction for large time intervals
+        # Properly interpolate even for 5-second interval data
+        if abs(dt_total) > 1.0:
+            # Calculate phase rate (cycles/second)
+            phase_rate = delta_L / dt_total
 
-        # 正常な場合は線形補間
-        L_interp = L1 + (L2 - L1) * dt / dt_total
+            # Check for abnormal rate (satellite line-of-sight velocity usually within ±4000 cycles/s)
+            if abs(phase_rate) > 10000:
+                # Use nearest observation if abnormal
+                if abs(dt) < abs(t2 - t):
+                    return L1
+                else:
+                    return L2
+
+            # Interpolate using rate
+            L_interp = L1 + phase_rate * dt
+        else:
+            # Simple linear interpolation for short intervals
+            L_interp = L1 + delta_L * dt / dt_total
 
     return L_interp
 
 
 def interp_observation(obs1: dict, obs2: dict, t1: float, t2: float, t: float) -> dict:
     """
-    観測値全体の補間（RTKLIBのinterpobs相当）
-    
+    Interpolation of entire observation (equivalent to RTKLIB's interpobs)
+
     Parameters:
     -----------
     obs1, obs2 : dict
-        前後エポックの観測値
+        Observations at previous and next epochs
     t1, t2 : float
-        前後エポックの時刻
+        Time of previous and next epochs
     t : float
-        補間対象時刻
-    
+        Target interpolation time
+
     Returns:
     --------
-    dict : 補間された観測値
+    dict : Interpolated observation
     """
     if abs(t - t1) < DTTOL:
         return obs1
     if abs(t - t2) < DTTOL:
         return obs2
     
-    # 補間された観測値を格納
+    # Store interpolated observations
     obs_interp = {}
-    
-    # 各周波数の擬似距離を補間
+
+    # Interpolate pseudorange for each frequency
     if hasattr(obs1, 'P') and hasattr(obs2, 'P'):
         P_interp = []
         for i in range(min(len(obs1.P), len(obs2.P))):
@@ -179,16 +189,16 @@ def interp_observation(obs1: dict, obs2: dict, t1: float, t2: float, t: float) -
                 P_interp.append(0.0)
         obs_interp['P'] = np.array(P_interp)
     
-    # 搬送波位相の補間（ドップラーを使用、より慎重に）
+    # Carrier phase interpolation (using Doppler, more carefully)
     if hasattr(obs1, 'L') and hasattr(obs2, 'L'):
         L_interp = []
         for i in range(min(len(obs1.L), len(obs2.L))):
             if obs1.L[i] != 0 and obs2.L[i] != 0:
-                # ドップラーが利用可能な場合
+                # If Doppler is available
                 if hasattr(obs1, 'D') and hasattr(obs2, 'D') and \
                    i < len(obs1.D) and i < len(obs2.D) and \
                    obs1.D[i] != 0 and obs2.D[i] != 0:
-                    # 周波数を決定（L1, L2, L5など）
+                    # Determine frequency (L1, L2, L5, etc.)
                     if i == 0:
                         freq = FREQ_L1
                     elif i == 1:
@@ -200,49 +210,51 @@ def interp_observation(obs1: dict, obs2: dict, t1: float, t2: float, t: float) -
                                            obs1.D[i], obs2.D[i],
                                            t1, t2, t, freq)
                 else:
-                    # ドップラーがない場合は最も近い観測値を使用（補間しない）
-                    # これによりキャリアフェーズのジャンプを防ぐ
-                    if abs(t - t1) < abs(t - t2):
-                        L = obs1.L[i]
+                    # RTKLIB style: perform linear interpolation even without Doppler
+                    # This prevents carrier phase jumps due to time discontinuities
+                    dt = t2 - t1
+                    if dt != 0:
+                        # Linear interpolation: L = L1 + (L2-L1) * (t-t1)/(t2-t1)
+                        L = obs1.L[i] + (obs2.L[i] - obs1.L[i]) * (t - t1) / dt
                     else:
-                        L = obs2.L[i]
+                        L = obs1.L[i]
                 L_interp.append(L)
             else:
                 L_interp.append(0.0)
         obs_interp['L'] = np.array(L_interp)
     
-    # その他の属性をコピー
+    # Copy other attributes
     obs_interp['sat'] = obs1.sat if hasattr(obs1, 'sat') else obs1.get('sat')
     obs_interp['system'] = obs1.system if hasattr(obs1, 'system') else obs1.get('system')
     
     return obs_interp
 
 
-def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict], 
+def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict],
                    use_lowrate: bool = False) -> List[Tuple[dict, dict, float]]:
     """
-    RTKLIBのsyncobs関数を模倣した観測値同期
-    
+    Observation synchronization mimicking RTKLIB's syncobs function
+
     Parameters:
     -----------
     rover_obs_list : List[dict]
-        移動局観測値リスト
+        Rover observation list
     base_obs_list : List[dict]
-        基準局観測値リスト
+        Base station observation list
     use_lowrate : bool
-        低レート用の許容値を使用するか
-    
+        Whether to use low-rate tolerance
+
     Returns:
     --------
-    List[Tuple[dict, dict, float]] : 同期されたペアのリスト
+    List[Tuple[dict, dict, float]] : List of synchronized pairs
     """
     dttol = DTTOL_LOWRATE if use_lowrate else DTTOL
     
     synchronized = []
-    i, j = 0, 0  # インデックス
-    
+    i, j = 0, 0  # indices
+
     while i < len(rover_obs_list) and j < len(base_obs_list):
-        # 時刻を取得
+        # Get time
         t_rover = rover_obs_list[i].get('gps_time', rover_obs_list[i].get('time'))
         t_base = base_obs_list[j].get('gps_time', base_obs_list[j].get('time'))
         
@@ -252,63 +264,71 @@ def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict],
         dt = timediff(t_rover, t_base)
         
         if abs(dt) < dttol:
-            # 時刻が十分近い - ペアとして追加
+            # Time is close enough - add as pair
             synchronized.append((rover_obs_list[i], base_obs_list[j], dt))
             i += 1
             j += 1
         elif dt > 0:
-            # 移動局が進んでいる - 基準局を進める
-            j += 1
-            # 補間が可能か確認
-            if j > 0 and j < len(base_obs_list):
-                # 前後の基準局観測値で補間
-                t_prev = base_obs_list[j-1].get('gps_time', base_obs_list[j-1].get('time'))
-                t_next = base_obs_list[j].get('gps_time', base_obs_list[j].get('time'))
-                
-                if t_prev <= t_rover <= t_next and (t_next - t_prev) <= 2.0:
-                    # 補間を実行
+            # Rover is ahead - try to interpolate base
+            # Check if interpolation is possible (between current j and j+1)
+            if j + 1 < len(base_obs_list):
+                # Interpolate with current and next base observations
+                t_prev = base_obs_list[j].get('gps_time', base_obs_list[j].get('time'))
+                t_next = base_obs_list[j+1].get('gps_time', base_obs_list[j+1].get('time'))
+
+                # RTKLIB style: allow interpolation up to 10 seconds (for low-rate data)
+                max_interp_time = 10.0 if use_lowrate else 2.0
+                if t_prev <= t_rover <= t_next and (t_next - t_prev) <= max_interp_time:
+                    # Perform interpolation
                     base_interp = interpolate_base_epoch(
-                        base_obs_list[j-1], base_obs_list[j],
+                        base_obs_list[j], base_obs_list[j+1],
                         t_prev, t_next, t_rover
                     )
                     synchronized.append((rover_obs_list[i], base_interp, 0.0))
                     i += 1
+                else:
+                    # If cannot interpolate, advance base station
+                    j += 1
+            else:
+                # No next base station
+                break
         else:
-            # 基準局が進んでいる - 移動局を進める
+            # Base is ahead - advance rover
             i += 1
+            # RTKLIB usually doesn't interpolate rover side (for real-time processing)
     
     return synchronized
 
 
 def interpolate_base_epoch(base1: dict, base2: dict, t1: float, t2: float, t: float) -> dict:
     """
-    基準局エポック全体の補間
-    
+    Interpolation of entire base station epoch
+
     Parameters:
     -----------
     base1, base2 : dict
-        前後の基準局エポック
+        Previous and next base station epochs
     t1, t2 : float
-        前後エポックの時刻
+        Time of previous and next epochs
     t : float
-        補間対象時刻
-    
+        Target interpolation time
+
     Returns:
     --------
-    dict : 補間されたエポック
+    dict : Interpolated epoch
     """
-    # 補間されたエポックを作成
+    # Create interpolated epoch
     base_interp = {
         'gps_time': t,
         'time': t,
         'interpolated': True
     }
-    
-    # 観測値を取得
+
+    # Get observations
     obs1 = base1.get('observations', {})
     obs2 = base2.get('observations', {})
-    
-    # 観測値を辞書形式に変換
+
+    # Convert observations to dictionary format
     if isinstance(obs1, list):
         obs1_dict = {obs.sat: obs for obs in obs1}
     else:
@@ -319,17 +339,17 @@ def interpolate_base_epoch(base1: dict, base2: dict, t1: float, t2: float, t: fl
     else:
         obs2_dict = obs2
     
-    # 共通衛星の観測値を補間
+    # Interpolate observations for common satellites
     interp_obs = {}
     for sat in obs1_dict:
         if sat in obs2_dict:
-            # この衛星の観測値を補間
+            # Interpolate observation for this satellite
             obs_interp = interp_observation(obs1_dict[sat], obs2_dict[sat], t1, t2, t)
             
-            # 元のオブジェクトタイプを保持
+            # Preserve original object type
             if hasattr(obs1_dict[sat], '__class__'):
-                # オブジェクトとして再構築
-                # Observationクラスには必須引数があるため、ダミー値で初期化
+                # Reconstruct as object
+                # Observation class has required arguments, initialize with dummy values
                 try:
                     new_obs = obs1_dict[sat].__class__(
                         time=t,
@@ -337,17 +357,23 @@ def interpolate_base_epoch(base1: dict, base2: dict, t1: float, t2: float, t: fl
                         system=obs1_dict[sat].system if hasattr(obs1_dict[sat], 'system') else 1
                     )
                 except:
-                    # 引数なしで作成を試みる
+                    # Try to create without arguments
                     new_obs = type('Observation', (), {})()
                     new_obs.time = t
                     new_obs.sat = sat
                 
-                if 'P' in obs_interp:
-                    new_obs.P = obs_interp['P']
-                if 'L' in obs_interp:
-                    new_obs.L = obs_interp['L']
-                if hasattr(obs1_dict[sat], 'D'):
-                    # ドップラーは線形補間
+                if isinstance(obs_interp, dict):
+                    if 'P' in obs_interp:
+                        new_obs.P = obs_interp['P']
+                    if 'L' in obs_interp:
+                        new_obs.L = obs_interp['L']
+                else:
+                    # obs_interp is already an Observation object
+                    new_obs = obs_interp
+
+                # Only process Doppler if we created new_obs from dict
+                if isinstance(obs_interp, dict) and hasattr(obs1_dict[sat], 'D'):
+                    # Linear interpolation for Doppler
                     alpha = (t - t1) / (t2 - t1)
                     if hasattr(obs2_dict[sat], 'D'):
                         new_obs.D = obs1_dict[sat].D + alpha * (obs2_dict[sat].D - obs1_dict[sat].D)

@@ -153,24 +153,22 @@ class DDCarrierPhaseFactor:
             range_base_ref = np.linalg.norm(self.sat_pos_ref - self.base_pos_ecef)
             range_base_other = np.linalg.norm(self.sat_pos_other - self.base_pos_ecef)
             
-            # RTKLIB-style: compute zero-diff residuals first, then DD
+            # RTKLIB-style: DD observation - (DD range + ambiguity)
             if self.rover_obs_ref is not None:
-                # Zero-diff residuals: y = observation - computed_range (in cycles)
-                # Rover residuals
-                y_rover_ref = self.rover_obs_ref - (range_rover_ref / self.wavelength)
-                y_rover_other = self.rover_obs_other - (range_rover_other / self.wavelength)
-                # Base residuals
-                y_base_ref = self.base_obs_ref - (range_base_ref / self.wavelength)
-                y_base_other = self.base_obs_other - (range_base_other / self.wavelength)
+                # Form DD from observations (in cycles)
+                sd_rover = self.rover_obs_other - self.rover_obs_ref
+                sd_base = self.base_obs_other - self.base_obs_ref
+                dd_obs = sd_rover - sd_base
 
-                # Double difference of residuals (following RTKLIB's ddres)
-                # RTKLIB: v = (y_rover_other - y_rover_ref) - (y_base_other - y_base_ref)
-                # Note: DD = (other - ref) for both rover and base
-                dd_residual = (y_rover_other - y_rover_ref) - (y_base_other - y_base_ref)
+                # Form DD from ranges (in cycles)
+                dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
+                dd_range_cycles = dd_range / self.wavelength
 
-                # Include ambiguity term in error calculation
-                # Error = DD_residual - DD_ambiguity
-                error = np.array([dd_residual - dd_ambiguity], dtype=np.float64)
+                # RTKLIB residual: v = L - (ρ + N)
+                # where L is DD observation, ρ is DD range, N is ambiguity
+                residual = dd_obs - (dd_range_cycles + dd_ambiguity)
+
+                error = np.array([residual], dtype=np.float64)
             else:
                 # Fallback: traditional method if observations not provided
                 dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)

@@ -24,7 +24,7 @@ from collections import defaultdict
 from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS, sat2sys
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
-from ..gnss.rtklib_interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
+from ..gnss.interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
 from ..gnss.residual_interpolation import compute_residual, interpolate_residual, compute_residuals_for_epoch
 
 
@@ -385,13 +385,16 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
             base_time = first_obs.time
     
     # Create base epochs list for interpolation
-    if base_obs_list is not None and base_obs_index is not None:
+    if base_obs_list is not None:
         # Use provided base station list for better interpolation
         base_epochs = base_obs_list
-    else:
+    elif base_obs is not None:
         # Fall back to single epoch (backward compatibility)
         base_epoch = {'gps_time': base_time, 'observations': base_obs}
         base_epochs = [base_epoch]
+    else:
+        # No base observations provided
+        return []
     
     # Create rover epoch
     rover_epoch = {'gps_time': rover_time, 'observations': rover_obs}
@@ -548,44 +551,58 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                     if (len(rover_obs_sat.L) > freq_idx and len(base_obs_sat.L) > freq_idx and
                         len(ref_rover_obs.L) > freq_idx and len(ref_base_obs.L) > freq_idx):
                         
-                        # Extract carrier phase measurements (in cycles)
-                        rover_cp = rover_obs_sat.L[freq_idx] if rover_obs_sat.L[freq_idx] != 0 else None
-                        base_cp = base_obs_sat.L[freq_idx] if base_obs_sat.L[freq_idx] != 0 else None
-                        ref_rover_cp = ref_rover_obs.L[freq_idx] if ref_rover_obs.L[freq_idx] != 0 else None
-                        ref_base_cp = ref_base_obs.L[freq_idx] if ref_base_obs.L[freq_idx] != 0 else None
-                        
-                        if None not in [rover_cp, base_cp, ref_rover_cp, ref_base_cp]:
-                            # Form DD carrier phase
-                            sd_rover_cp = rover_cp - ref_rover_cp
-                            sd_base_cp = base_cp - ref_base_cp
-                            dd_carrier = sd_rover_cp - sd_base_cp
-                            
-                            # Get wavelength based on frequency and system
-                            from ..core.constants import FREQ_L1, FREQ_L2, FREQ_L5
-                            from ..core.constants import FREQ_E1, FREQ_E5a, FREQ_E5b
-                            from ..core.constants import FREQ_B1I, FREQ_B3
-                            
-                            # Determine frequency based on system and freq_idx
-                            sys_char = sys_map.get(sat2sys(sat), 'U')
-                            freq = None
-                            
-                            if sys_char == 'G':  # GPS
-                                freq = [FREQ_L1, FREQ_L2, FREQ_L5][freq_idx] if freq_idx < 3 else None
-                            elif sys_char == 'E':  # Galileo
-                                freq = [FREQ_E1, FREQ_E5a, FREQ_E5b][freq_idx] if freq_idx < 3 else None
-                            elif sys_char == 'C':  # BeiDou
-                                freq = [FREQ_B1I, FREQ_B3][freq_idx] if freq_idx < 2 else None
-                            elif sys_char == 'J':  # QZSS (same as GPS)
-                                freq = [FREQ_L1, FREQ_L2, FREQ_L5][freq_idx] if freq_idx < 3 else None
-                            
-                            if freq:
-                                wavelength = CLIGHT / freq
+                        # Get frequency first for conversion
+                        from ..core.constants import FREQ_L1, FREQ_L2, FREQ_L5
+                        from ..core.constants import FREQ_E1, FREQ_E5a, FREQ_E5b
+                        from ..core.constants import FREQ_B1I, FREQ_B3
+
+                        # Determine frequency based on system and freq_idx
+                        sys_char = sys_map.get(sat2sys(sat), 'U')
+                        freq = None
+
+                        if sys_char == 'G':  # GPS
+                            freq = [FREQ_L1, FREQ_L2, FREQ_L5][freq_idx] if freq_idx < 3 else None
+                        elif sys_char == 'E':  # Galileo
+                            freq = [FREQ_E1, FREQ_E5a, FREQ_E5b][freq_idx] if freq_idx < 3 else None
+                        elif sys_char == 'C':  # BeiDou
+                            freq = [FREQ_B1I, FREQ_B3][freq_idx] if freq_idx < 2 else None
+                        elif sys_char == 'J':  # QZSS (same as GPS)
+                            freq = [FREQ_L1, FREQ_L2, FREQ_L5][freq_idx] if freq_idx < 3 else None
+
+                        if not freq:
+                            continue
+
+                        wavelength = CLIGHT / freq
+
+                        # Extract carrier phase measurements (in cycles from RINEX)
+                        rover_cp_cycles = rover_obs_sat.L[freq_idx] if rover_obs_sat.L[freq_idx] != 0 else None
+                        base_cp_cycles = base_obs_sat.L[freq_idx] if base_obs_sat.L[freq_idx] != 0 else None
+                        ref_rover_cp_cycles = ref_rover_obs.L[freq_idx] if ref_rover_obs.L[freq_idx] != 0 else None
+                        ref_base_cp_cycles = ref_base_obs.L[freq_idx] if ref_base_obs.L[freq_idx] != 0 else None
+
+                        if None not in [rover_cp_cycles, base_cp_cycles, ref_rover_cp_cycles, ref_base_cp_cycles]:
+                            # Convert carrier phase to meters like RTKLIB
+                            # RTKLIB: obs.L[ix,f] * _c / freq
+                            rover_cp_meters = rover_cp_cycles * wavelength
+                            base_cp_meters = base_cp_cycles * wavelength
+                            ref_rover_cp_meters = ref_rover_cp_cycles * wavelength
+                            ref_base_cp_meters = ref_base_cp_cycles * wavelength
+
+                            # Form DD carrier phase in meters
+                            sd_rover_meters = rover_cp_meters - ref_rover_cp_meters
+                            sd_base_meters = base_cp_meters - ref_base_cp_meters
+                            dd_carrier_meters = sd_rover_meters - sd_base_meters
+
+                            # Convert back to cycles for compatibility
+                            dd_carrier = dd_carrier_meters / wavelength
+                        else:
+                            dd_carrier = None
                 
                 dd_measurements.append({
                     'sat': sat,
                     'ref_sat': ref_sat,
                     'dd_obs': dd_obs,
-                    'dd_carrier': dd_carrier,  # DD carrier phase in cycles
+                    'dd_carrier': dd_carrier,  # DD carrier phase in cycles (converted from meters)
                     'wavelength': wavelength,   # Wavelength in meters
                     'sat_pos': data['pos'],
                     'ref_sat_pos': ref_data['pos'],
@@ -593,11 +610,11 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                     'ref_sat_clk': ref_data['clk'],
                     'elevation': data['elevation'],
                     'freq_idx': freq_idx,
-                    # Individual carrier phase observations for RTKLIB-style residual
-                    'rover_carrier_ref': ref_rover_cp if dd_carrier is not None else None,  # Rover to ref sat (cycles)
-                    'rover_carrier_other': rover_cp if dd_carrier is not None else None,     # Rover to other sat (cycles)
-                    'base_carrier_ref': ref_base_cp if dd_carrier is not None else None,     # Base to ref sat (cycles)
-                    'base_carrier_other': base_cp if dd_carrier is not None else None        # Base to other sat (cycles)
+                    # Individual carrier phase observations for debugging
+                    'rover_carrier_ref': ref_rover_cp_cycles if dd_carrier is not None else None,  # Rover to ref sat (cycles)
+                    'rover_carrier_other': rover_cp_cycles if dd_carrier is not None else None,     # Rover to other sat (cycles)
+                    'base_carrier_ref': ref_base_cp_cycles if dd_carrier is not None else None,     # Base to ref sat (cycles)
+                    'base_carrier_other': base_cp_cycles if dd_carrier is not None else None        # Base to other sat (cycles)
                 })
     
     return dd_measurements
