@@ -131,6 +131,9 @@ DEFAULT_MAXINNO = [MAXINNO_PHASE, MAXINNO_CODE]
 # TIME SYNCHRONIZATION
 # ============================================================================
 MAXTDIFF = 3.0           # Max time difference between rover and base (sec)
+DTTOL = 0.005            # Time sync tolerance (5ms)
+MAX_INTERP_TIME = 10.0   # Maximum interpolation time interval (10s)
+MAXDTOE = 7200.0         # Maximum ephemeris time difference (2 hours)
 
 # ============================================================================
 # FIX AND HOLD

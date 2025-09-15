@@ -24,7 +24,8 @@ from collections import defaultdict
 from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS, sat2sys
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
-from ..gnss.interp import interpolate_base_epoch, DTTOL, DTTOL_LOWRATE
+from ..gnss.interp import interpolate_base_epoch
+from ..core.stats import DTTOL
 from ..gnss.residual_interpolation import compute_residual, interpolate_residual, compute_residuals_for_epoch
 
 
@@ -264,7 +265,7 @@ def syncobs(rover_obs_list, base_obs_list, max_time_diff=30.0, interpolate=True)
 
 def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                           reference_ecef, reference_llh,
-                          use_systems=None, cutoff_angle=15.0,
+                          use_systems=None, use_frequencies=None, cutoff_angle=15.0,
                           use_residual_interp=True, rover_position=None,
                           base_obs_list=None, base_obs_index=None):
     """
@@ -517,12 +518,16 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                            len(ref_rover_obs.P), len(ref_base_obs.P))
             
             for freq_idx in range(max_freqs):
+                # Skip if this frequency is not requested
+                if use_frequencies is not None and freq_idx not in use_frequencies:
+                    continue
+
                 # Check if all pseudoranges are valid
                 rover_pr = rover_obs_sat.P[freq_idx] if rover_obs_sat.P[freq_idx] != 0 else None
                 base_pr = base_obs_sat.P[freq_idx] if base_obs_sat.P[freq_idx] != 0 else None
                 ref_rover_pr = ref_rover_obs.P[freq_idx] if ref_rover_obs.P[freq_idx] != 0 else None
                 ref_base_pr = ref_base_obs.P[freq_idx] if ref_base_obs.P[freq_idx] != 0 else None
-                
+
                 if None in [rover_pr, base_pr, ref_rover_pr, ref_base_pr]:
                     continue
                 

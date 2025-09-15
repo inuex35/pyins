@@ -21,14 +21,10 @@ Based on RTKLIB's interpobs() and syncobs() functions
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-# RTKLIB constants
-DTTOL = 0.005  # 5ms: strict time sync tolerance (for high rate)
-DTTOL_LOWRATE = 0.025  # 25ms: tolerance for low rate (1Hz)
-MAXDTOE = 7200.0  # maximum ephemeris time difference
-FREQ_L1 = 1.57542e9  # L1 frequency (Hz)
-FREQ_L2 = 1.22760e9  # L2 frequency (Hz)
-FREQ_L5 = 1.17645e9  # L5 frequency (Hz)
-CLIGHT = 299792458.0  # speed of light (m/s)
+from ..core.constants import CLIGHT, FREQ_L1, FREQ_L2, FREQ_L5
+from ..core.stats import DTTOL, MAX_INTERP_TIME, MAXDTOE
+
+# Derived constants
 WAVELENGTH_L1 = CLIGHT / FREQ_L1  # L1 wavelength
 
 
@@ -230,8 +226,7 @@ def interp_observation(obs1: dict, obs2: dict, t1: float, t2: float, t: float) -
     return obs_interp
 
 
-def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict],
-                   use_lowrate: bool = False) -> List[Tuple[dict, dict, float]]:
+def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict]) -> List[Tuple[dict, dict, float]]:
     """
     Observation synchronization mimicking RTKLIB's syncobs function
 
@@ -241,14 +236,12 @@ def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict],
         Rover observation list
     base_obs_list : List[dict]
         Base station observation list
-    use_lowrate : bool
-        Whether to use low-rate tolerance
 
     Returns:
     --------
     List[Tuple[dict, dict, float]] : List of synchronized pairs
     """
-    dttol = DTTOL_LOWRATE if use_lowrate else DTTOL
+    dttol = DTTOL
     
     synchronized = []
     i, j = 0, 0  # indices
@@ -276,8 +269,8 @@ def syncobs_rtklib(rover_obs_list: List[dict], base_obs_list: List[dict],
                 t_prev = base_obs_list[j].get('gps_time', base_obs_list[j].get('time'))
                 t_next = base_obs_list[j+1].get('gps_time', base_obs_list[j+1].get('time'))
 
-                # RTKLIB style: allow interpolation up to 10 seconds (for low-rate data)
-                max_interp_time = 10.0 if use_lowrate else 2.0
+                # RTKLIB style: allow interpolation up to MAX_INTERP_TIME
+                max_interp_time = MAX_INTERP_TIME
                 if t_prev <= t_rover <= t_next and (t_next - t_prev) <= max_interp_time:
                     # Perform interpolation
                     base_interp = interpolate_base_epoch(
