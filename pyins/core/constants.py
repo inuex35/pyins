@@ -27,6 +27,8 @@ FREQ_L5 = 1.17645E9   # L5 frequency (Hz)
 # GLONASS frequencies
 FREQ_G1 = 1.60200E9   # GLONASS G1 base frequency (Hz)
 FREQ_G2 = 1.24600E9   # GLONASS G2 base frequency (Hz)
+FREQ_R1 = FREQ_G1     # Alias for compatibility (R for GLONASS)
+FREQ_R2 = FREQ_G2     # Alias for compatibility (R for GLONASS)
 DFREQ_G1 = 0.56250E6  # GLONASS G1 channel spacing (Hz)
 DFREQ_G2 = 0.43750E6  # GLONASS G2 channel spacing (Hz)
 

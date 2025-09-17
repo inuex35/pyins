@@ -657,18 +657,20 @@ def satpos(obs, nav):
         from ..core.time import gps_seconds_to_week_tow
         week, tow = gps_seconds_to_week_tow(t_tx)
 
-        # Select ephemeris (seleph expects TOW for all systems)
-        eph = seleph(nav, tow, ob.sat)
+        # Select ephemeris
+        # GLONASS needs full GPS time, others can use TOW
+        sys = sat2sys(ob.sat)
+        if sys == SYS_GLO:
+            eph = seleph(nav, t_tx, ob.sat)  # Use full GPS time for GLONASS
+        else:
+            eph = seleph(nav, tow, ob.sat)  # Use TOW for others
         if eph is None:
             svh[i] = -1
             continue
 
         try:
-            # Get satellite system
-            sys = sat2sys(ob.sat)
-
             # For GLONASS, use full GPS time; for others, use TOW
-            if sys == 'R':  # GLONASS
+            if sys == SYS_GLO:  # GLONASS (use integer constant)
                 # Use full GPS time for GLONASS (t_tx is already full GPS time)
                 time_for_eph = t_tx  # Full GPS time
             else:
