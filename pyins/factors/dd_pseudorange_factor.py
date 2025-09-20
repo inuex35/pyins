@@ -21,11 +21,14 @@ from pyins.observation.measurement_model import troposphere_model, ionosphere_mo
 from pyins.coordinate.transforms import ecef2llh
 from pyins.observation.pseudorange import elevation_angle
 
-# RTKLIB-style error ratios
-ERATIO_L1 = 100  # Error ratio for L1
-ERATIO_L2 = 100  # Error ratio for L2  
-ERATIO_L5 = 100  # Error ratio for L5
-ERR_CONSTANT = 0.003  # 3mm constant error
+# More realistic error parameters for RTK
+# Based on typical RTK performance expectations
+ERRATIO_L1 = 100  # Error ratio for L1 (pseudorange/carrier phase)
+ERRATIO_L2 = 100  # Error ratio for L2
+ERRATIO_L5 = 100  # Error ratio for L5
+ERR_BASE = 0.003  # Base error term (3mm) for carrier phase
+ERR_EL = 0.003    # Elevation-dependent error term (3mm)
+ERR_CONSTANT = 0.003  # Keep for compatibility
 
 
 def compute_azimuth(sat_pos: np.ndarray, rcv_pos: np.ndarray) -> float:
@@ -166,12 +169,24 @@ class DDPseudorangeFactor:
         # Create noise model if not provided
         if noise_model is None:
             # Select ERATIO based on frequency index
-            eratio_map = [ERATIO_L1, ERATIO_L2, ERATIO_L5]
+            eratio_map = [ERRATIO_L1, ERRATIO_L2, ERRATIO_L5]
             eratio = eratio_map[min(self.freq_idx, 2)]  # Default to L5 ratio for higher frequencies
             
-            # RTKLIB approach: code_sigma = phase_sigma * eratio
-            phase_sigma = ERR_CONSTANT  # 0.003m = 3mm
-            code_sigma = phase_sigma * eratio
+            # RTKLIB approach: variance = 2 * fact * (a^2 + b^2/sin^2(el))
+            # where fact = eratio for pseudorange
+            # Calculate elevation angle for the satellite
+            el_deg = dd_data.get('elevation', 45.0)  # Default 45 degrees if not provided
+            el_rad = np.radians(el_deg)
+            sin_el = np.sin(el_rad)
+
+            # Compute variance using RTKLIB formula
+            # Note: RTKLIB uses factor of 2 for double difference
+            a = ERR_BASE  # Base error term
+            b = ERR_EL    # Elevation-dependent term
+            var_base = 2.0 * eratio * (a*a + b*b/(sin_el*sin_el))
+
+            # Convert variance to standard deviation
+            code_sigma = np.sqrt(var_base)
             self.noise_model = gtsam.noiseModel.Isotropic.Sigma(1, code_sigma)
         else:
             self.noise_model = noise_model
