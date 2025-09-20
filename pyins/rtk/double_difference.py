@@ -334,21 +334,23 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 ref_rover_pr = ref_rover_obs.P[freq_idx]
                 ref_base_pr = ref_base_obs.P[freq_idx]
 
-                # Apply satellite clock corrections
-                # Use rover satellite clock for rover observations
-                rover_corrected = rover_pr - data['clk'] * CLIGHT
-                ref_rover_corrected = ref_rover_pr - ref_data['clk'] * CLIGHT
-
-                # Use base satellite clock for base observations
-                base_corrected = base_pr - data['base_clk'] * CLIGHT
-                ref_base_corrected = ref_base_pr - ref_data['base_clk'] * CLIGHT
-
-                # Form single differences
-                sd_rover = rover_corrected - ref_rover_corrected
-                sd_base = base_corrected - ref_base_corrected
+                # Form single differences from RAW observations
+                # DO NOT apply satellite clock corrections to observations
+                # Clock corrections are only applied to computed geometric ranges
+                sd_rover = rover_pr - ref_rover_pr
+                sd_base = base_pr - ref_base_pr
 
                 # Form double difference
                 dd_obs = sd_rover - sd_base
+
+                # Debug: Print first DD for verification
+                if len(dd_measurements) == 0 and freq_idx == 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"First DD: G{ref_sat}-G{sat}")
+                    logger.debug(f"  Rover: {rover_pr:.3f} - {ref_rover_pr:.3f} = {sd_rover:.3f}")
+                    logger.debug(f"  Base:  {base_pr:.3f} - {ref_base_pr:.3f} = {sd_base:.3f}")
+                    logger.debug(f"  DD: {dd_obs:.3f}")
 
                 # Also extract carrier phase if available
                 dd_carrier = None
