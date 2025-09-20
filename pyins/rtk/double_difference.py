@@ -156,27 +156,36 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
 
         if base_exact is not None:
             # Use exact match
+            # Using exact match, base_time already set
             if isinstance(base_exact, list):
                 base_obs_dict = {obs.sat: obs for obs in base_exact}
             else:
                 base_obs_dict = base_exact
-        elif base_before and base_after:
-            # Interpolate between base observations
-            idx_before, epoch_before, time_before = base_before
-            idx_after, epoch_after, time_after = base_after
+            # base_time already set when exact match found
+        elif base_before:
+            # Use the nearest base observation (before or after)
+            # Choose the closest one if we have both
+            if base_after:
+                idx_before, epoch_before, time_before = base_before
+                idx_after, epoch_after, time_after = base_after
 
-            # Simple linear interpolation for now
-            base_interp = interpolate_base_epoch(
-                epoch_before, epoch_after,
-                time_before, time_after,
-                rover_time
-            )
-
-            if isinstance(base_interp['observations'], list):
-                base_obs_dict = {obs.sat: obs for obs in base_interp['observations']}
+                # Use the closer observation
+                if abs(time_before - rover_time) <= abs(time_after - rover_time):
+                    # Using nearest base before
+                    # Using base before
+                    base_obs_dict = {obs.sat: obs for obs in epoch_before['observations']}
+                    base_time = time_before
+                else:
+                    # Using nearest base after
+                    # Using base after
+                    base_obs_dict = {obs.sat: obs for obs in epoch_after['observations']}
+                    base_time = time_after
             else:
-                base_obs_dict = base_interp['observations']
-            base_time = rover_time
+                # Only have base_before
+                idx, epoch, time = base_before
+                # Using nearest base before (only)
+                base_obs_dict = {obs.sat: obs for obs in epoch['observations']}
+                base_time = time  # Use actual base observation time
         else:
             logger.warning(f"Failed to find suitable base observations for time {rover_time}")
             return []
@@ -201,37 +210,45 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
 
     # Compute satellite positions separately for rover and base
     # This is critical for accurate DD when observations are at different times
+    # IMPORTANT: Use compute_satellite_position directly instead of satpos
+    # to avoid transmission time correction which is inappropriate for DD
+
     rover_obs_list = list(rover_obs_dict.values())
     base_obs_list = list(base_obs_dict.values())
 
-    # Update observation times to ensure correct satellite position/clock computation
-    # This is necessary because observations may have incorrect time attributes
+    # Import compute_satellite_position for direct calculation
+    from ..gnss.ephemeris import compute_satellite_position
+
+    # Compute satellite positions/clocks at exact observation times
+    # Use dictionaries to avoid indexing issues
+    rover_sat_positions = {}
+    rover_sat_clocks = {}
     for obs in rover_obs_list:
-        obs.time = rover_time
-    for obs in base_obs_list:
-        obs.time = base_time
-
-    # Debug: Check observation times
-    if rover_obs_list and base_obs_list:
-        rover_time = rover_obs_list[0].time if hasattr(rover_obs_list[0], 'time') else 0
-        base_time = base_obs_list[0].time if hasattr(base_obs_list[0], 'time') else 0
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Rover obs time: {rover_time}, Base obs time: {base_time}, diff: {rover_time - base_time}")
-
-    # Compute satellite positions/clocks for rover time
-    rover_sat_positions, rover_sat_clocks, _, _ = satpos(rover_obs_list, nav_data)
+        # Use rover observation time directly (no transmission time correction)
+        pos, clk, _ = compute_satellite_position(obs.sat, rover_time, nav_data)
+        if pos is not None:  # Only store valid positions
+            rover_sat_positions[obs.sat] = pos
+            rover_sat_clocks[obs.sat] = clk
 
     # Compute satellite positions/clocks for base time
-    base_sat_positions, base_sat_clocks, _, _ = satpos(base_obs_list, nav_data)
+    base_sat_positions = {}
+    base_sat_clocks = {}
+    # Compute satellite positions at appropriate times
+    for obs in base_obs_list:
+        # Use base observation time directly (no transmission time correction)
+        pos, clk, _ = compute_satellite_position(obs.sat, base_time, nav_data)
+        if pos is not None:  # Only store valid positions
+            base_sat_positions[obs.sat] = pos
+            base_sat_clocks[obs.sat] = clk
+        # Store position and clock for this satellite
 
-    # Debug: Check if clocks are different
-    if len(rover_sat_clocks) > 0 and len(base_sat_clocks) > 0:
-        logger.debug(f"First rover sat clock: {rover_sat_clocks[0]*1e6:.3f} μs, base sat clock: {base_sat_clocks[0]*1e6:.3f} μs")
+    # Debug: Check if clocks are different (commented out - logger not initialized)
+    # if len(rover_sat_clocks) > 0 and len(base_sat_clocks) > 0:
+    #     import logging
+    #     logger = logging.getLogger(__name__)
+    #     logger.debug(f"First rover sat clock: {rover_sat_clocks[0]*1e6:.3f} μs, base sat clock: {base_sat_clocks[0]*1e6:.3f} μs")
 
-    # Create mapping from satellite to index for quick lookup
-    rover_sat_index = {obs.sat: i for i, obs in enumerate(rover_obs_list)}
-    base_sat_index = {obs.sat: i for i, obs in enumerate(base_obs_list)}
+    # No longer need index mappings since we're using dictionaries
 
     dd_measurements = []
 
@@ -244,18 +261,18 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
         sat_data = {}
         for sat in sats:
             # Get rover satellite position/clock
-            if sat not in rover_sat_index:
+            if sat not in rover_sat_positions:
                 continue
-            rover_idx = rover_sat_index[sat]
-            rover_sat_pos = rover_sat_positions[rover_idx]
-            rover_sat_clk = rover_sat_clocks[rover_idx]
+            rover_sat_pos = rover_sat_positions[sat]
+            rover_sat_clk = rover_sat_clocks[sat]
 
             # Get base satellite position/clock
-            if sat not in base_sat_index:
+            if sat not in base_sat_positions:
                 continue
-            base_idx = base_sat_index[sat]
-            base_sat_pos = base_sat_positions[base_idx]
-            base_sat_clk = base_sat_clocks[base_idx]
+            base_sat_pos = base_sat_positions[sat]
+            base_sat_clk = base_sat_clocks[sat]
+
+            # Retrieved satellite positions from dictionaries
 
             # Skip if no valid position
             if np.all(rover_sat_pos == 0) or np.all(base_sat_pos == 0):
@@ -272,6 +289,8 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
 
             if elevation < cutoff_angle:
                 continue
+
+            # Store satellite data for DD formation
 
             sat_data[sat] = {
                 'pos': rover_sat_pos,  # Rover satellite position
@@ -333,6 +352,8 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 base_pr = base_obs_sat.P[freq_idx]
                 ref_rover_pr = ref_rover_obs.P[freq_idx]
                 ref_base_pr = ref_base_obs.P[freq_idx]
+
+                # First DD will use these observations
 
                 # Form single differences from RAW observations
                 # DO NOT apply satellite clock corrections to observations
@@ -415,7 +436,7 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                                 # Convert back to cycles for output
                                 dd_carrier = dd_carrier_meters / wavelength
 
-                # Store the DD measurement
+                # Store the DD measurement with raw observations for proper DD computation
                 dd_measurements.append({
                     'sat': sat,
                     'ref_sat': ref_sat,
@@ -425,14 +446,21 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                     'dd_carrier': dd_carrier,
                     'wavelength': wavelength,
                     'elevation': data['elevation'],
-                    'sat_pos': data['pos'],  # Rover satellite position
-                    'ref_sat_pos': ref_data['pos'],  # Rover reference satellite position
-                    'base_sat_pos': data['base_pos'],  # Base satellite position
-                    'base_ref_sat_pos': ref_data['base_pos'],  # Base reference satellite position
-                    'sat_clk': data['clk'],  # Rover satellite clock
-                    'ref_sat_clk': ref_data['clk'],  # Rover reference satellite clock
-                    'base_sat_clk': data['base_clk'],  # Base satellite clock
-                    'base_ref_sat_clk': ref_data['base_clk'],  # Base reference satellite clock
+                    'sat_pos': data['pos'],  # Rover time satellite position
+                    'ref_sat_pos': ref_data['pos'],  # Rover time reference satellite position
+                    'base_sat_pos': data['base_pos'],  # Base time satellite position
+                    'base_ref_sat_pos': ref_data['base_pos'],  # Base time reference satellite position
+                    'sat_clk': data['clk'],  # Rover time satellite clock
+                    'ref_sat_clk': ref_data['clk'],  # Rover time reference satellite clock
+                    'base_sat_clk': data['base_clk'],  # Base time satellite clock
+                    'base_ref_sat_clk': ref_data['base_clk'],  # Base time reference satellite clock
+                    # Add raw pseudorange observations for proper DD residual computation
+                    'use_residual_interp': True,  # Enable proper DD computation in factor
+                    'rover_pr': rover_pr,  # Raw rover observation to satellite
+                    'rover_pr_ref': ref_rover_pr,  # Raw rover observation to reference satellite
+                    'base_pr': base_pr,  # Raw base observation to satellite
+                    'base_pr_ref': ref_base_pr,  # Raw base observation to reference satellite
+                    # Carrier phase observations (in cycles)
                     'rover_carrier_ref': ref_rover_cp_cycles if dd_carrier is not None else None,
                     'rover_carrier_other': rover_cp_cycles if dd_carrier is not None else None,
                     'base_carrier_ref': ref_base_cp_cycles if dd_carrier is not None else None,

@@ -226,17 +226,24 @@ class DDPseudorangeFactor:
                 # PROPER DD COMPUTATION WITH RAW OBSERVATIONS
                 # When we have raw observations, compute DD correctly:
                 # DD = (rover_other - rover_ref) - (base_other - base_ref)
-                
+
                 # Single differences
                 sd_rover = self.rover_pr_other - self.rover_pr_ref
                 sd_base = self.base_pr_other - self.base_pr_ref
-                
+
                 # Double difference of observations
                 dd_observations = sd_rover - sd_base
-                
-                # DD of computed ranges
-                dd_computed = (range_rover_other - range_base_other) - (range_rover_ref - range_base_ref)
-                
+
+                # Compute base ranges using BASE time satellite positions
+                # CRITICAL: Must use base satellite positions/clocks, not rover's!
+                base_geom_other = np.linalg.norm(self.base_sat_pos_other - self.base_pos_ecef)
+                base_geom_ref = np.linalg.norm(self.base_sat_pos_ref - self.base_pos_ecef)
+                range_base_other_correct = base_geom_other - CLIGHT * self.base_sat_clk_other
+                range_base_ref_correct = base_geom_ref - CLIGHT * self.base_sat_clk_ref
+
+                # DD of computed ranges (using correct base ranges)
+                dd_computed = (range_rover_other - range_base_other_correct) - (range_rover_ref - range_base_ref_correct)
+
                 # Residual is the difference
                 residual = dd_observations - dd_computed
                 
