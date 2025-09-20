@@ -177,20 +177,24 @@ class DDCarrierPhaseFactor:
             
             # Compute Jacobians if requested
             if H is not None and len(H) > 0:
-                # Unit vectors (line-of-sight)
+                # Unit vectors (line-of-sight) from rover to satellites
                 e_ref = (self.sat_pos_ref - rover_ecef) / range_rover_ref
                 e_other = (self.sat_pos_other - rover_ecef) / range_rover_other
-                
+
                 # DD geometry matrix in ECEF
-                H_ecef = -e_other + e_ref
-                
+                # d(DD)/d(rover_ecef) = d(range_other)/d(rover_ecef) - d(range_ref)/d(rover_ecef)
+                #                     = -e_other - (-e_ref) = e_ref - e_other
+                H_ecef = e_ref - e_other
+
                 # Transform to ENU
+                # Since rover_ecef = base_ecef + R_enu2ecef @ rover_enu
+                # d(DD)/d(rover_enu) = H_ecef @ R_enu2ecef
                 H_enu = H_ecef @ self.R_enu2ecef
-                
+
                 # Scale by wavelength to get cycles
                 H_enu_cycles = H_enu / self.wavelength
-                
-                # Set Jacobians (same convention as pseudorange factor)
+
+                # Set Jacobians (residual = measured - computed, so negative)
                 H[0] = np.asarray(-H_enu_cycles.reshape(1, 3), dtype=np.float64)  # w.r.t. position
                 if len(H) > 1:
                     H[1] = np.array([[-1.0]], dtype=np.float64)  # w.r.t. ambiguity

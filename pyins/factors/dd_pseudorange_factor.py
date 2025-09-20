@@ -308,35 +308,30 @@ class DDPseudorangeFactor:
             
             # Compute Jacobian if requested
             if H is not None and len(H) > 0:
-                # Use numerical differentiation for now until analytical is fixed
-                epsilon = 1e-6
-                H_numerical = np.zeros((1, 3))
-                
-                for j in range(3):
-                    # Perturb position
-                    rover_enu_plus = rover_enu.copy()
-                    rover_enu_minus = rover_enu.copy()
-                    rover_enu_plus[j] += epsilon
-                    rover_enu_minus[j] -= epsilon
-                    
-                    # Compute DD at perturbed positions
-                    rover_ecef_plus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_plus
-                    rover_ecef_minus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_minus
-                    
-                    # Ranges at plus position
-                    range_rover_other_plus = np.linalg.norm(self.sat_pos_other - rover_ecef_plus)
-                    range_rover_ref_plus = np.linalg.norm(self.sat_pos_ref - rover_ecef_plus)
-                    dd_plus = (range_rover_other_plus - range_base_other) - (range_rover_ref_plus - range_base_ref)
-                    
-                    # Ranges at minus position
-                    range_rover_other_minus = np.linalg.norm(self.sat_pos_other - rover_ecef_minus)
-                    range_rover_ref_minus = np.linalg.norm(self.sat_pos_ref - rover_ecef_minus)
-                    dd_minus = (range_rover_other_minus - range_base_other) - (range_rover_ref_minus - range_base_ref)
-                    
-                    # Numerical derivative
-                    H_numerical[0, j] = -(dd_plus - dd_minus) / (2 * epsilon)  # Negative because error = measured - computed
-                
-                H[0] = H_numerical
+                # Analytical Jacobian computation
+                # DD residual = measured - computed
+                # computed DD = (rover_other - base_other) - (rover_ref - base_ref)
+                # d(residual)/d(rover_pos) = -d(computed DD)/d(rover_pos)
+
+                # Unit vectors from rover to satellites (in ECEF)
+                e_other = vec_rover_other / geom_range_rover_other  # Unit vector to other satellite
+                e_ref = vec_rover_ref / geom_range_rover_ref        # Unit vector to reference satellite
+
+                # DD geometry matrix in ECEF
+                # d(DD)/d(rover_ecef) = d(range_rover_other)/d(rover_ecef) - d(range_rover_ref)/d(rover_ecef)
+                #                     = -e_other - (-e_ref) = e_ref - e_other
+                H_ecef = e_ref - e_other
+
+                # Convert Jacobian from ECEF to ENU coordinates
+                # Since rover_ecef = base_ecef + R_enu2ecef @ rover_enu
+                # d(rover_ecef)/d(rover_enu) = R_enu2ecef
+                # Therefore: d(DD)/d(rover_enu) = d(DD)/d(rover_ecef) @ d(rover_ecef)/d(rover_enu)
+                #                                = H_ecef @ R_enu2ecef
+                H_enu = H_ecef @ self.R_enu2ecef
+
+                # Since residual = measured - computed, and measured is constant:
+                # d(residual)/d(rover_enu) = -d(computed)/d(rover_enu) = -H_enu
+                H[0] = -H_enu.reshape(1, 3)
             
             return error
         
