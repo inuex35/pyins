@@ -217,30 +217,14 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
     base_obs_list = list(base_obs_dict.values())
 
     # Import compute_satellite_position for direct calculation
-    from ..gnss.ephemeris import compute_satellite_position
+    # Use new satposs function for proper transmission time handling
+    from ..gnss.satposs import satposs_dict
 
-    # Compute satellite positions/clocks at exact observation times
-    # Use dictionaries to avoid indexing issues
-    rover_sat_positions = {}
-    rover_sat_clocks = {}
-    for obs in rover_obs_list:
-        # Use rover observation time directly (no transmission time correction)
-        pos, clk, _ = compute_satellite_position(obs.sat, rover_time, nav_data)
-        if pos is not None:  # Only store valid positions
-            rover_sat_positions[obs.sat] = pos
-            rover_sat_clocks[obs.sat] = clk
+    # Compute satellite positions/clocks at transmission times (RTKLIB-style)
+    rover_sat_positions, rover_sat_clocks = satposs_dict(rover_obs_dict, nav_data, rover_time)
 
-    # Compute satellite positions/clocks for base time
-    base_sat_positions = {}
-    base_sat_clocks = {}
-    # Compute satellite positions at appropriate times
-    for obs in base_obs_list:
-        # Use base observation time directly (no transmission time correction)
-        pos, clk, _ = compute_satellite_position(obs.sat, base_time, nav_data)
-        if pos is not None:  # Only store valid positions
-            base_sat_positions[obs.sat] = pos
-            base_sat_clocks[obs.sat] = clk
-        # Store position and clock for this satellite
+    # Compute satellite positions/clocks for base at transmission times
+    base_sat_positions, base_sat_clocks = satposs_dict(base_obs_dict, nav_data, base_time)
 
     # Debug: Check if clocks are different (commented out - logger not initialized)
     # if len(rover_sat_clocks) > 0 and len(base_sat_clocks) > 0:
