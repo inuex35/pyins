@@ -317,6 +317,10 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 # Also extract carrier phase if available
                 dd_carrier = None
                 wavelength = None
+                rover_cp_cycles = None
+                base_cp_cycles = None
+                ref_rover_cp_cycles = None
+                ref_base_cp_cycles = None
 
                 # Check carrier phase availability (L attribute)
                 if (hasattr(rover_obs_sat, 'L') and hasattr(base_obs_sat, 'L') and
@@ -382,7 +386,13 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                     'dd_obs': dd_obs,
                     'dd_carrier': dd_carrier,
                     'wavelength': wavelength,
-                    'elevation': data['elevation']
+                    'elevation': data['elevation'],
+                    'sat_pos': data['pos'],
+                    'ref_sat_pos': ref_data['pos'],
+                    'rover_carrier_ref': ref_rover_cp_cycles if dd_carrier is not None else None,
+                    'rover_carrier_other': rover_cp_cycles if dd_carrier is not None else None,
+                    'base_carrier_ref': ref_base_cp_cycles if dd_carrier is not None else None,
+                    'base_carrier_other': base_cp_cycles if dd_carrier is not None else None
                 })
 
     return dd_measurements
