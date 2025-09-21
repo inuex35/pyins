@@ -243,7 +243,12 @@ def form_double_differences(rover_obs, base_obs, nav_data, rover_time,
                 'rover_residual': rover_data['residual_cycles'],
                 'base_residual': base_data['residual_cycles'],
                 'ref_rover_residual': ref_rover['residual_cycles'],
-                'ref_base_residual': ref_base['residual_cycles']
+                'ref_base_residual': ref_base['residual_cycles'],
+                # Also include raw carrier phase observations for DDCarrierPhaseFactor
+                'rover_cp_ref': ref_rover_cp,  # Rover obs to ref sat (cycles)
+                'rover_cp_other': rover_cp,     # Rover obs to other sat (cycles)
+                'base_cp_ref': ref_base_cp,     # Base obs to ref sat (cycles)
+                'base_cp_other': base_cp        # Base obs to other sat (cycles)
             })
 
     return dd_measurements

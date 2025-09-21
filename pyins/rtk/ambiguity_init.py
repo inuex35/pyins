@@ -153,11 +153,24 @@ class AmbiguityManager:
         ambiguity_key_base = (sat, ref_sat, freq_idx)
 
         # Calculate current ambiguity estimate
-        current_ambiguity = initialize_dd_ambiguity(
-            dd_data['dd_obs'],
-            dd_data['dd_carrier'],
-            wavelength
-        )
+        # The dd_residual from form_double_differences is computed as:
+        # dd_residual = dd_carrier - dd_range_cycles
+        # This represents the ambiguity + position error effect
+        #
+        # For initial estimate, we'll use it as the ambiguity estimate
+        # The optimization will refine both position and ambiguity jointly
+        if 'dd_residual' in dd_data and dd_data['dd_residual'] is not None:
+            # Use the RTKLIB-style residual as initial ambiguity estimate
+            # This includes position error but optimization will handle it
+            current_ambiguity = dd_data['dd_residual']
+        else:
+            # Fallback to pseudorange-based estimate
+            # This is less accurate but provides a starting point
+            current_ambiguity = initialize_dd_ambiguity(
+                dd_data['dd_obs'],
+                dd_data['dd_carrier'],
+                wavelength
+            )
 
         if ambiguity_key_base not in self.ambiguity_tracking:
             # New ambiguity - first observation of this satellite pair
