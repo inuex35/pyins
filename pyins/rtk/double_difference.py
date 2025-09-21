@@ -189,7 +189,11 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
 
                         # Create interpolated observation
                         from ..core.data_structures import Observation
-                        obs_interp = Observation(sat)
+                        obs_interp = Observation(
+                            time=rover_time,
+                            sat=sat,
+                            system=sat2sys(sat)
+                        )
 
                         # Interpolate pseudorange observations
                         if hasattr(obs1, 'C1C') and hasattr(obs2, 'C1C'):
@@ -255,7 +259,7 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                         base_obs_dict[sat] = obs_interp
 
                     base_time = rover_time  # Use interpolated time
-                    logger.debug(f"Interpolated {len(base_obs_dict)} base observations to time {rover_time}")
+                    # Debug: interpolated observations
                 else:
                     # Use the closer observation without interpolation
                     if abs(time_before - rover_time) <= abs(time_after - rover_time):
@@ -270,10 +274,10 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 base_obs_dict = {obs.sat: obs for obs in epoch['observations']}
                 base_time = time
         else:
-            logger.warning(f"Failed to find suitable base observations for time {rover_time}")
+            # Failed to find suitable base observations
             return []
     else:
-        logger.warning("No base observations provided")
+        # No base observations provided
         return []
 
     # Find common satellites
@@ -433,12 +437,8 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
 
                 # Debug: Print first DD for verification
                 if len(dd_measurements) == 0 and freq_idx == 0:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.debug(f"First DD: G{ref_sat}-G{sat}")
-                    logger.debug(f"  Rover: {rover_pr:.3f} - {ref_rover_pr:.3f} = {sd_rover:.3f}")
-                    logger.debug(f"  Base:  {base_pr:.3f} - {ref_base_pr:.3f} = {sd_base:.3f}")
-                    logger.debug(f"  DD: {dd_obs:.3f}")
+                    # Debug first DD if needed
+                    pass
 
                 # Also extract carrier phase if available
                 dd_carrier = None
