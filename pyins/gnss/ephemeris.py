@@ -401,7 +401,8 @@ def eph2clk(t, eph):
         dt = dtadjust(t_week, eph.toc)
 
     # Limit time difference for extrapolation
-    if abs(dt) > 7200.0:  # 2 hours
+    # Increased limit to handle older ephemeris data
+    if abs(dt) > 604800.0:  # 1 week (was 2 hours)
         return 0.0
 
     # Satellite clock polynomial
@@ -669,13 +670,15 @@ def satpos(obs, nav):
             continue
 
         try:
-            # For GLONASS, use full GPS time; for others, use TOW
+            # For GLONASS, use full GPS time; for others, use full GPS time too
+            # Using full GPS time for all systems ensures consistent clock computation
             if sys == SYS_GLO:  # GLONASS (use integer constant)
                 # Use full GPS time for GLONASS (t_tx is already full GPS time)
                 time_for_eph = t_tx  # Full GPS time
             else:
-                # Use TOW for GPS/Galileo/BeiDou
-                time_for_eph = tow  # Use the TOW we already calculated
+                # Use full GPS time for GPS/Galileo/BeiDou for better precision
+                # This ensures clock differences are properly computed for close times
+                time_for_eph = t_tx  # Use full GPS time instead of TOW
 
             # Satellite clock correction
             dt_sat = eph2clk(time_for_eph, eph)

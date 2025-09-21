@@ -21,11 +21,14 @@ from pyins.observation.measurement_model import troposphere_model, ionosphere_mo
 from pyins.coordinate.transforms import ecef2llh
 from pyins.observation.pseudorange import elevation_angle
 
-# RTKLIB-style error ratios
-ERATIO_L1 = 100  # Error ratio for L1
-ERATIO_L2 = 100  # Error ratio for L2  
-ERATIO_L5 = 100  # Error ratio for L5
-ERR_CONSTANT = 0.003  # 3mm constant error
+# More realistic error parameters for RTK
+# Based on typical RTK performance expectations
+ERRATIO_L1 = 100  # Error ratio for L1 (pseudorange/carrier phase)
+ERRATIO_L2 = 100  # Error ratio for L2
+ERRATIO_L5 = 100  # Error ratio for L5
+ERR_BASE = 0.003  # Base error term (3mm) for carrier phase
+ERR_EL = 0.003    # Elevation-dependent error term (3mm)
+ERR_CONSTANT = 0.003  # Keep for compatibility
 
 
 def compute_azimuth(sat_pos: np.ndarray, rcv_pos: np.ndarray) -> float:
@@ -166,12 +169,24 @@ class DDPseudorangeFactor:
         # Create noise model if not provided
         if noise_model is None:
             # Select ERATIO based on frequency index
-            eratio_map = [ERATIO_L1, ERATIO_L2, ERATIO_L5]
+            eratio_map = [ERRATIO_L1, ERRATIO_L2, ERRATIO_L5]
             eratio = eratio_map[min(self.freq_idx, 2)]  # Default to L5 ratio for higher frequencies
             
-            # RTKLIB approach: code_sigma = phase_sigma * eratio
-            phase_sigma = ERR_CONSTANT  # 0.003m = 3mm
-            code_sigma = phase_sigma * eratio
+            # RTKLIB approach: variance = 2 * fact * (a^2 + b^2/sin^2(el))
+            # where fact = eratio for pseudorange
+            # Calculate elevation angle for the satellite
+            el_deg = dd_data.get('elevation', 45.0)  # Default 45 degrees if not provided
+            el_rad = np.radians(el_deg)
+            sin_el = np.sin(el_rad)
+
+            # Compute variance using RTKLIB formula
+            # Note: RTKLIB uses factor of 2 for double difference
+            a = ERR_BASE  # Base error term
+            b = ERR_EL    # Elevation-dependent term
+            var_base = 2.0 * eratio * (a*a + b*b/(sin_el*sin_el))
+
+            # Convert variance to standard deviation
+            code_sigma = np.sqrt(var_base)
             self.noise_model = gtsam.noiseModel.Isotropic.Sigma(1, code_sigma)
         else:
             self.noise_model = noise_model
@@ -211,17 +226,24 @@ class DDPseudorangeFactor:
                 # PROPER DD COMPUTATION WITH RAW OBSERVATIONS
                 # When we have raw observations, compute DD correctly:
                 # DD = (rover_other - rover_ref) - (base_other - base_ref)
-                
+
                 # Single differences
                 sd_rover = self.rover_pr_other - self.rover_pr_ref
                 sd_base = self.base_pr_other - self.base_pr_ref
-                
+
                 # Double difference of observations
                 dd_observations = sd_rover - sd_base
-                
-                # DD of computed ranges
-                dd_computed = (range_rover_other - range_base_other) - (range_rover_ref - range_base_ref)
-                
+
+                # Compute base ranges using BASE time satellite positions
+                # CRITICAL: Must use base satellite positions/clocks, not rover's!
+                base_geom_other = np.linalg.norm(self.base_sat_pos_other - self.base_pos_ecef)
+                base_geom_ref = np.linalg.norm(self.base_sat_pos_ref - self.base_pos_ecef)
+                range_base_other_correct = base_geom_other - CLIGHT * self.base_sat_clk_other
+                range_base_ref_correct = base_geom_ref - CLIGHT * self.base_sat_clk_ref
+
+                # DD of computed ranges (using correct base ranges)
+                dd_computed = (range_rover_other - range_base_other_correct) - (range_rover_ref - range_base_ref_correct)
+
                 # Residual is the difference
                 residual = dd_observations - dd_computed
                 
@@ -293,35 +315,30 @@ class DDPseudorangeFactor:
             
             # Compute Jacobian if requested
             if H is not None and len(H) > 0:
-                # Use numerical differentiation for now until analytical is fixed
-                epsilon = 1e-6
-                H_numerical = np.zeros((1, 3))
-                
-                for j in range(3):
-                    # Perturb position
-                    rover_enu_plus = rover_enu.copy()
-                    rover_enu_minus = rover_enu.copy()
-                    rover_enu_plus[j] += epsilon
-                    rover_enu_minus[j] -= epsilon
-                    
-                    # Compute DD at perturbed positions
-                    rover_ecef_plus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_plus
-                    rover_ecef_minus = self.base_pos_ecef + self.R_enu2ecef @ rover_enu_minus
-                    
-                    # Ranges at plus position
-                    range_rover_other_plus = np.linalg.norm(self.sat_pos_other - rover_ecef_plus)
-                    range_rover_ref_plus = np.linalg.norm(self.sat_pos_ref - rover_ecef_plus)
-                    dd_plus = (range_rover_other_plus - range_base_other) - (range_rover_ref_plus - range_base_ref)
-                    
-                    # Ranges at minus position
-                    range_rover_other_minus = np.linalg.norm(self.sat_pos_other - rover_ecef_minus)
-                    range_rover_ref_minus = np.linalg.norm(self.sat_pos_ref - rover_ecef_minus)
-                    dd_minus = (range_rover_other_minus - range_base_other) - (range_rover_ref_minus - range_base_ref)
-                    
-                    # Numerical derivative
-                    H_numerical[0, j] = -(dd_plus - dd_minus) / (2 * epsilon)  # Negative because error = measured - computed
-                
-                H[0] = H_numerical
+                # Analytical Jacobian computation
+                # DD residual = measured - computed
+                # computed DD = (rover_other - base_other) - (rover_ref - base_ref)
+                # d(residual)/d(rover_pos) = -d(computed DD)/d(rover_pos)
+
+                # Unit vectors from rover to satellites (in ECEF)
+                e_other = vec_rover_other / geom_range_rover_other  # Unit vector to other satellite
+                e_ref = vec_rover_ref / geom_range_rover_ref        # Unit vector to reference satellite
+
+                # DD geometry matrix in ECEF
+                # d(DD)/d(rover_ecef) = d(range_rover_other)/d(rover_ecef) - d(range_rover_ref)/d(rover_ecef)
+                #                     = -e_other - (-e_ref) = e_ref - e_other
+                H_ecef = e_ref - e_other
+
+                # Convert Jacobian from ECEF to ENU coordinates
+                # Since rover_ecef = base_ecef + R_enu2ecef @ rover_enu
+                # d(rover_ecef)/d(rover_enu) = R_enu2ecef
+                # Therefore: d(DD)/d(rover_enu) = d(DD)/d(rover_ecef) @ d(rover_ecef)/d(rover_enu)
+                #                                = H_ecef @ R_enu2ecef
+                H_enu = H_ecef @ self.R_enu2ecef
+
+                # Since residual = measured - computed, and measured is constant:
+                # d(residual)/d(rover_enu) = -d(computed)/d(rover_enu) = -H_enu
+                H[0] = -H_enu.reshape(1, 3)
             
             return error
         
