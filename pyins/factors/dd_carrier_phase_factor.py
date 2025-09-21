@@ -153,28 +153,17 @@ class DDCarrierPhaseFactor:
             range_base_ref = np.linalg.norm(self.sat_pos_ref - self.base_pos_ecef)
             range_base_other = np.linalg.norm(self.sat_pos_other - self.base_pos_ecef)
             
-            # RTKLIB-style: DD observation - (DD range + ambiguity)
-            if self.rover_obs_ref is not None:
-                # Form DD from observations (in cycles)
-                sd_rover = self.rover_obs_other - self.rover_obs_ref
-                sd_base = self.base_obs_other - self.base_obs_ref
-                dd_obs = sd_rover - sd_base
+            # Compute DD range in cycles
+            dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
+            dd_range_cycles = dd_range / self.wavelength
 
-                # Form DD from ranges (in cycles)
-                dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
-                dd_range_cycles = dd_range / self.wavelength
+            # Standard carrier phase measurement equation: CP = ρ/λ + N (RTKLIB convention)
+            # Residual: v = CP_measured - CP_computed = CP - (ρ/λ + N)
+            # Note: dd_phase_cycles is the DD carrier phase observation
+            # dd_ambiguity should be the integer ambiguity that makes residual zero at true position
+            residual = self.dd_phase_cycles - (dd_range_cycles + dd_ambiguity)
+            error = np.array([residual], dtype=np.float64)
 
-                # Carrier phase measurement equation: CP = ρ/λ + N (RTKLIB convention)
-                # Residual: v = CP_measured - CP_computed = CP - (ρ/λ + N)
-                residual = dd_obs - (dd_range_cycles + dd_ambiguity)
-
-                error = np.array([residual], dtype=np.float64)
-            else:
-                # Fallback: traditional method if observations not provided
-                dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
-                dd_range_cycles = dd_range / self.wavelength
-                # Measurement equation: CP = ρ/λ + N (RTKLIB convention)
-                error = np.array([self.dd_phase_cycles - (dd_range_cycles + dd_ambiguity)], dtype=np.float64)
             
             # Compute Jacobians if requested
             if H is not None and len(H) > 0:
