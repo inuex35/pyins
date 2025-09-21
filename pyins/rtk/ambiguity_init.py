@@ -95,22 +95,22 @@ def check_cycle_slip(prev_ambiguity: float, curr_ambiguity: float,
 
 class AmbiguityManager:
     """
-    Manages carrier phase ambiguities for DD processing.
+    Manages carrier phase ambiguities for DD processing WITHOUT continuity constraints.
+
+    This version does NOT add BetweenFactor constraints between epochs.
+    Each epoch's ambiguity is treated independently with only a prior constraint.
     """
 
-    def __init__(self, prior_sigma: float = 100.0, continuity_sigma: float = 0.01):
+    def __init__(self, prior_sigma: float = 100.0):
         """
-        Initialize ambiguity manager.
+        Initialize ambiguity manager without continuity constraints.
 
         Parameters:
         -----------
         prior_sigma : float
             Standard deviation for ambiguity prior (cycles)
-        continuity_sigma : float
-            Standard deviation for ambiguity continuity constraint (cycles)
         """
         self.prior_sigma = prior_sigma
-        self.continuity_sigma = continuity_sigma
         self.ambiguity_tracking = {}  # (sat, ref_sat, freq) -> current_key
         self.ambiguity_history = {}   # (sat, ref_sat, freq) -> list of values
         self.cycle_slip_count = {}    # (sat, ref_sat, freq) -> count
@@ -120,7 +120,7 @@ class AmbiguityManager:
                          initial_values: gtsam.Values,
                          N: callable) -> gtsam.Symbol:
         """
-        Process ambiguity for a DD measurement.
+        Process ambiguity for a DD measurement WITHOUT continuity constraints.
 
         Parameters:
         -----------
@@ -181,7 +181,7 @@ class AmbiguityManager:
             prev_key = self.ambiguity_tracking[ambiguity_key_base]
             prev_values = self.ambiguity_history[ambiguity_key_base]
 
-            # Check for cycle slip
+            # Check for cycle slip (for logging purposes only)
             if len(prev_values) > 0:
                 prev_ambiguity = prev_values[-1]
                 if check_cycle_slip(prev_ambiguity, current_ambiguity):
@@ -189,26 +189,18 @@ class AmbiguityManager:
                                  f"prev={prev_ambiguity:.3f}, curr={current_ambiguity:.3f}")
                     self.cycle_slip_count[ambiguity_key_base] += 1
 
-                    # Reset ambiguity after cycle slip
-                    initial_values.insert(ambiguity_id, current_ambiguity)
+            # IMPORTANT CHANGE: NO CONTINUITY CONSTRAINT
+            # Each epoch gets its own independent ambiguity with only a prior
+            initial_values.insert(ambiguity_id, current_ambiguity)
 
-                    # Add weaker prior for reset
-                    reset_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([self.prior_sigma * 2]))
-                    graph.push_back(gtsam.PriorFactorDouble(
-                        ambiguity_id, current_ambiguity, reset_noise
-                    ))
-                else:
-                    # No cycle slip - add continuity constraint
-                    initial_values.insert(ambiguity_id, current_ambiguity)
+            # Add prior constraint (same for all epochs, no continuity)
+            prior_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([self.prior_sigma]))
+            graph.push_back(gtsam.PriorFactorDouble(
+                ambiguity_id, current_ambiguity, prior_noise
+            ))
 
-                    # Add between factor for continuity
-                    between_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([self.continuity_sigma]))
-                    graph.push_back(gtsam.BetweenFactorDouble(
-                        prev_key, ambiguity_id, 0.0, between_noise
-                    ))
-            else:
-                # No history yet
-                initial_values.insert(ambiguity_id, current_ambiguity)
+            logger.debug(f"Ambiguity for {ambiguity_key_base} epoch {epoch_idx}: "
+                        f"{current_ambiguity:.3f} cycles (no continuity constraint)")
 
             # Update tracking
             self.ambiguity_tracking[ambiguity_key_base] = ambiguity_id
