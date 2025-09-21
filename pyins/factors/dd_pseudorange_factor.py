@@ -17,15 +17,12 @@
 import numpy as np
 import gtsam
 from pyins.core.constants import CLIGHT, FREQ_L1, FREQ_L2, FREQ_L5
+from pyins.core.stats import ERATIO_L1 as ERRATIO_L1, ERATIO_L2 as ERRATIO_L2, ERATIO_L5 as ERRATIO_L5
 from pyins.observation.measurement_model import troposphere_model, ionosphere_model
 from pyins.coordinate.transforms import ecef2llh
 from pyins.observation.pseudorange import elevation_angle
 
-# More realistic error parameters for RTK
-# Based on typical RTK performance expectations
-ERRATIO_L1 = 100  # Error ratio for L1 (pseudorange/carrier phase)
-ERRATIO_L2 = 100  # Error ratio for L2
-ERRATIO_L5 = 100  # Error ratio for L5
+# Error parameters for RTK
 ERR_BASE = 0.003  # Base error term (3mm) for carrier phase
 ERR_EL = 0.003    # Elevation-dependent error term (3mm)
 ERR_CONSTANT = 0.003  # Keep for compatibility

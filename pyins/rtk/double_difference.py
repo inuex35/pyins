@@ -240,6 +240,11 @@ def form_double_differences(rover_obs, base_obs, nav_data, rover_time,
                 'wavelength': wavelength,
                 'sat_pos': rover_data['sat_pos'],
                 'ref_sat_pos': ref_rover['sat_pos'],
+                # Add base satellite positions for DDPseudorangeFactor v2.0+
+                'base_sat_pos': base_data['sat_pos'],  # Base time satellite position
+                'base_ref_sat_pos': ref_base['sat_pos'],  # Base time ref satellite position
+                'base_sat_clk': base_data['sat_clk'],  # Base time satellite clock
+                'base_ref_sat_clk': ref_base['sat_clk'],  # Base time ref satellite clock
                 'rover_residual': rover_data['residual_cycles'],
                 'base_residual': base_data['residual_cycles'],
                 'ref_rover_residual': ref_rover['residual_cycles'],
