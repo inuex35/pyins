@@ -163,29 +163,112 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 base_obs_dict = base_exact
             # base_time already set when exact match found
         elif base_before:
-            # Use the nearest base observation (before or after)
-            # Choose the closest one if we have both
+            # Interpolate base observations if we have both before and after
             if base_after:
                 idx_before, epoch_before, time_before = base_before
                 idx_after, epoch_after, time_after = base_after
 
-                # Use the closer observation
-                if abs(time_before - rover_time) <= abs(time_after - rover_time):
-                    # Using nearest base before
-                    # Using base before
-                    base_obs_dict = {obs.sat: obs for obs in epoch_before['observations']}
-                    base_time = time_before
+                # Check if interpolation is needed (time difference > 0.01s)
+                if abs(time_before - rover_time) > 0.01 and abs(time_after - rover_time) > 0.01:
+                    # Import interpolation functions
+                    from ..gnss.interp import interp_carrier_phase, interp_pseudorange
+
+                    # Interpolate observations for each satellite
+                    base_obs_dict = {}
+
+                    # Convert observations to dict format
+                    obs_before_dict = {obs.sat: obs for obs in epoch_before['observations']}
+                    obs_after_dict = {obs.sat: obs for obs in epoch_after['observations']}
+
+                    # Find common satellites between before and after
+                    common_sats_interp = set(obs_before_dict.keys()) & set(obs_after_dict.keys())
+
+                    for sat in common_sats_interp:
+                        obs1 = obs_before_dict[sat]
+                        obs2 = obs_after_dict[sat]
+
+                        # Create interpolated observation
+                        from ..core.data_structures import Observation
+                        obs_interp = Observation(sat)
+
+                        # Interpolate pseudorange observations
+                        if hasattr(obs1, 'C1C') and hasattr(obs2, 'C1C'):
+                            obs_interp.C1C = interp_pseudorange(
+                                obs1.C1C, obs2.C1C, time_before, time_after, rover_time
+                            )
+
+                        # Interpolate carrier phase observations
+                        if hasattr(obs1, 'L1C') and hasattr(obs2, 'L1C'):
+                            # Use Doppler if available
+                            D1 = getattr(obs1, 'D1C', 0.0)
+                            D2 = getattr(obs2, 'D1C', 0.0)
+                            obs_interp.L1C = interp_carrier_phase(
+                                obs1.L1C, obs2.L1C, D1, D2,
+                                time_before, time_after, rover_time
+                            )
+
+                        # Interpolate L2 if available
+                        if hasattr(obs1, 'L2W') and hasattr(obs2, 'L2W'):
+                            D1 = getattr(obs1, 'D2W', 0.0)
+                            D2 = getattr(obs2, 'D2W', 0.0)
+                            obs_interp.L2W = interp_carrier_phase(
+                                obs1.L2W, obs2.L2W, D1, D2,
+                                time_before, time_after, rover_time,
+                                freq=1227.6e6  # GPS L2 frequency
+                            )
+
+                        # Interpolate other pseudoranges
+                        for prn_code in ['C2W', 'C5Q']:
+                            if hasattr(obs1, prn_code) and hasattr(obs2, prn_code):
+                                pr1 = getattr(obs1, prn_code)
+                                pr2 = getattr(obs2, prn_code)
+                                setattr(obs_interp, prn_code,
+                                       interp_pseudorange(pr1, pr2, time_before, time_after, rover_time))
+
+                        # Interpolate other carrier phases
+                        carrier_freq = {
+                            'L5Q': 1176.45e6,  # GPS L5
+                            'L2C': 1227.6e6,   # GPS L2C
+                            'L2X': 1227.6e6,   # GPS L2
+                        }
+
+                        for phase_code, freq in carrier_freq.items():
+                            if hasattr(obs1, phase_code) and hasattr(obs2, phase_code):
+                                L1 = getattr(obs1, phase_code)
+                                L2 = getattr(obs2, phase_code)
+                                # Try to get corresponding Doppler
+                                doppler_code = 'D' + phase_code[1:]
+                                D1 = getattr(obs1, doppler_code, 0.0)
+                                D2 = getattr(obs2, doppler_code, 0.0)
+                                setattr(obs_interp, phase_code,
+                                       interp_carrier_phase(L1, L2, D1, D2,
+                                                          time_before, time_after, rover_time, freq))
+
+                        # Copy signal strength and other metadata from nearest
+                        if abs(time_before - rover_time) <= abs(time_after - rover_time):
+                            if hasattr(obs1, 'S1C'):
+                                obs_interp.S1C = obs1.S1C
+                        else:
+                            if hasattr(obs2, 'S1C'):
+                                obs_interp.S1C = obs2.S1C
+
+                        base_obs_dict[sat] = obs_interp
+
+                    base_time = rover_time  # Use interpolated time
+                    logger.debug(f"Interpolated {len(base_obs_dict)} base observations to time {rover_time}")
                 else:
-                    # Using nearest base after
-                    # Using base after
-                    base_obs_dict = {obs.sat: obs for obs in epoch_after['observations']}
-                    base_time = time_after
+                    # Use the closer observation without interpolation
+                    if abs(time_before - rover_time) <= abs(time_after - rover_time):
+                        base_obs_dict = {obs.sat: obs for obs in epoch_before['observations']}
+                        base_time = time_before
+                    else:
+                        base_obs_dict = {obs.sat: obs for obs in epoch_after['observations']}
+                        base_time = time_after
             else:
                 # Only have base_before
                 idx, epoch, time = base_before
-                # Using nearest base before (only)
                 base_obs_dict = {obs.sat: obs for obs in epoch['observations']}
-                base_time = time  # Use actual base observation time
+                base_time = time
         else:
             logger.warning(f"Failed to find suitable base observations for time {rover_time}")
             return []

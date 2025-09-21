@@ -164,16 +164,17 @@ class DDCarrierPhaseFactor:
                 dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
                 dd_range_cycles = dd_range / self.wavelength
 
-                # RTKLIB residual: v = L - (ρ + N)
-                # where L is DD observation, ρ is DD range, N is ambiguity
-                residual = dd_obs - (dd_range_cycles + dd_ambiguity)
+                # Carrier phase measurement equation: CP = ρ/λ - N
+                # Residual: v = CP_measured - CP_computed = CP - (ρ/λ - N)
+                residual = dd_obs - (dd_range_cycles - dd_ambiguity)
 
                 error = np.array([residual], dtype=np.float64)
             else:
                 # Fallback: traditional method if observations not provided
                 dd_range = (range_rover_other - range_rover_ref) - (range_base_other - range_base_ref)
                 dd_range_cycles = dd_range / self.wavelength
-                error = np.array([self.dd_phase_cycles - (dd_range_cycles + dd_ambiguity)], dtype=np.float64)
+                # Measurement equation: CP = ρ/λ - N
+                error = np.array([self.dd_phase_cycles - (dd_range_cycles - dd_ambiguity)], dtype=np.float64)
             
             # Compute Jacobians if requested
             if H is not None and len(H) > 0:
@@ -194,10 +195,13 @@ class DDCarrierPhaseFactor:
                 # Scale by wavelength to get cycles
                 H_enu_cycles = H_enu / self.wavelength
 
-                # Set Jacobians (residual = measured - computed, so negative)
+                # Set Jacobians
+                # Residual = CP - (ρ/λ - N) = CP - ρ/λ + N
+                # ∂residual/∂position = -∂(ρ/λ)/∂position
+                # ∂residual/∂N = +1
                 H[0] = np.asarray(-H_enu_cycles.reshape(1, 3), dtype=np.float64)  # w.r.t. position
                 if len(H) > 1:
-                    H[1] = np.array([[-1.0]], dtype=np.float64)  # w.r.t. ambiguity
+                    H[1] = np.array([[1.0]], dtype=np.float64)  # w.r.t. ambiguity (positive!)
             
             return error
         
@@ -321,8 +325,9 @@ class DDCarrierPhaseFactorFixed:
             # Convert to cycles
             dd_range_cycles = dd_range / self.wavelength
             
-            # Compute error: measured - (computed + fixed_ambiguity)
-            error = np.array([self.dd_phase_cycles - (dd_range_cycles + self.dd_ambiguity_fixed)], dtype=np.float64)
+            # Compute error: measured - (computed - fixed_ambiguity)
+            # Measurement equation: CP = ρ/λ - N
+            error = np.array([self.dd_phase_cycles - (dd_range_cycles - self.dd_ambiguity_fixed)], dtype=np.float64)
             
             # Compute Jacobian if requested
             if H is not None and len(H) > 0:
