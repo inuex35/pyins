@@ -86,10 +86,25 @@ class DDPseudorangeFactor:
         # CRITICAL: Extract BASE satellite positions and clocks (at base time)
         # When there's a time difference between rover and base observations,
         # we MUST use base satellite positions/clocks for base calculations
-        self.base_sat_pos_ref = dd_data.get('base_ref_sat_pos', dd_data.get('base_sat_pos_ref', self.sat_pos_ref))[:3]
-        self.base_sat_pos_other = dd_data.get('base_sat_pos', dd_data.get('base_sat_pos_other', self.sat_pos_other))[:3]
-        self.base_sat_clk_ref = dd_data.get('base_ref_sat_clk', self.sat_clk_ref)
-        self.base_sat_clk_other = dd_data.get('base_sat_clk', self.sat_clk_other)
+
+        # Check if base satellite positions are provided (REQUIRED in v2.0)
+        if 'base_sat_pos' not in dd_data and 'base_sat_pos_other' not in dd_data:
+            raise ValueError(
+                "DDPseudorangeFactor requires base satellite positions in v2.0+. "
+                "Missing 'base_sat_pos' or 'base_sat_pos_other' in dd_data. "
+                "This is likely because form_double_differences() was called from an older version. "
+                "Please ensure you're using pyins v2.0+ for DD measurement formation."
+            )
+        if 'base_ref_sat_pos' not in dd_data and 'base_sat_pos_ref' not in dd_data:
+            raise ValueError(
+                "DDPseudorangeFactor requires base reference satellite position in v2.0+. "
+                "Missing 'base_ref_sat_pos' or 'base_sat_pos_ref' in dd_data."
+            )
+
+        self.base_sat_pos_ref = dd_data.get('base_ref_sat_pos', dd_data.get('base_sat_pos_ref'))[:3]
+        self.base_sat_pos_other = dd_data.get('base_sat_pos', dd_data.get('base_sat_pos_other'))[:3]
+        self.base_sat_clk_ref = dd_data.get('base_ref_sat_clk', dd_data.get('base_sat_clk_ref', self.sat_clk_ref))
+        self.base_sat_clk_other = dd_data.get('base_sat_clk', dd_data.get('base_sat_clk_other', self.sat_clk_other))
         
         # Extract raw observations for proper DD computation
         # When residual interpolation is used, we need raw observations
