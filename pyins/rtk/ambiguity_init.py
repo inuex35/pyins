@@ -39,8 +39,9 @@ def initialize_dd_ambiguity(dd_pseudorange: float, dd_carrier_phase: float,
     # Convert pseudorange to cycles
     pr_cycles = dd_pseudorange / wavelength
 
-    # Calculate ambiguity: N = PR/λ - CP
-    ambiguity = pr_cycles - dd_carrier_phase
+    # Calculate ambiguity: N = CP - PR/λ (RTKLIB convention)
+    # This matches RTKLIB's bias[i] = cp - pr*freqi/CLIGHT
+    ambiguity = dd_carrier_phase - pr_cycles
 
     return ambiguity
 

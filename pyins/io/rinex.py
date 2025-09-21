@@ -368,26 +368,57 @@ class RinexObsReader:
                                     obs.SNR[freq_idx] = float(sat_data[snr_code])
                                     break
 
-                    # All signal processing is now handled by the priority-based system above
-                    # The code below (lines 263-464) contains legacy hardcoded signal handling
-                    # that can be safely removed as it's redundant with the priority-based system
-                    
+                    # Add direct L2 attribute access for dual-frequency processing
+                    # This supplements the priority-based system for easier L2 access
+
+                    # L1 attributes (for convenience)
+                    if 'C1C' in sat_data and not pd.isna(sat_data['C1C']):
+                        obs.C1C = float(sat_data['C1C'])
+                    if 'L1C' in sat_data and not pd.isna(sat_data['L1C']):
+                        obs.L1C = float(sat_data['L1C'])
+                    if 'D1C' in sat_data and not pd.isna(sat_data['D1C']):
+                        obs.D1C = float(sat_data['D1C'])
+                    if 'S1C' in sat_data and not pd.isna(sat_data['S1C']):
+                        obs.S1C = float(sat_data['S1C'])
+
+                    # L2 attributes - try multiple codes in priority order
+                    # GPS L2 pseudorange
+                    for code in ['C2W', 'C2L', 'C2C', 'C2S', 'C2X', 'C2P']:
+                        if code in sat_data and not pd.isna(sat_data[code]):
+                            setattr(obs, code, float(sat_data[code]))
+                            # Also ensure it's in the P array
+                            if len(obs.P) > 1 and obs.P[1] == 0:
+                                obs.P[1] = float(sat_data[code])
+                            break
+
+                    # GPS L2 carrier phase
+                    for code in ['L2W', 'L2L', 'L2C', 'L2S', 'L2X', 'L2P']:
+                        if code in sat_data and not pd.isna(sat_data[code]):
+                            setattr(obs, code, float(sat_data[code]))
+                            # Also ensure it's in the L array
+                            if len(obs.L) > 1 and obs.L[1] == 0:
+                                obs.L[1] = float(sat_data[code])
+                            break
+
+                    # GPS L2 Doppler
+                    for code in ['D2W', 'D2L', 'D2C', 'D2S', 'D2X', 'D2P']:
+                        if code in sat_data and not pd.isna(sat_data[code]):
+                            setattr(obs, code, float(sat_data[code]))
+                            if len(obs.D) > 1 and obs.D[1] == 0:
+                                obs.D[1] = float(sat_data[code])
+                            break
+
+                    # GPS L2 SNR
+                    for code in ['S2W', 'S2L', 'S2C', 'S2S', 'S2X', 'S2P']:
+                        if code in sat_data and not pd.isna(sat_data[code]):
+                            setattr(obs, code, float(sat_data[code]))
+                            if len(obs.SNR) > 1 and obs.SNR[1] == 0:
+                                obs.SNR[1] = float(sat_data[code])
+                            break
+
+                    # The old hardcoded L2 handling below is kept as comment for reference
                     """
-                    # Get L2 carrier phase (frequency index 1)
-                    if sys_char == 'G':  # GPS
-                        if 'L2W' in sat_data and not pd.isna(sat_data['L2W']):
-                            obs.L[1] = float(sat_data['L2W'])
-                        elif 'L2X' in sat_data and not pd.isna(sat_data['L2X']):
-                            obs.L[1] = float(sat_data['L2X'])
-                        elif 'L2L' in sat_data and not pd.isna(sat_data['L2L']):
-                            obs.L[1] = float(sat_data['L2L'])
-                        elif 'L2C' in sat_data and not pd.isna(sat_data['L2C']):
-                            obs.L[1] = float(sat_data['L2C'])
-                        elif 'L2S' in sat_data and not pd.isna(sat_data['L2S']):
-                            obs.L[1] = float(sat_data['L2S'])
-                        elif 'L2' in sat_data and not pd.isna(sat_data['L2']):
-                            obs.L[1] = float(sat_data['L2'])
-                    elif sys_char == 'R':  # GLONASS
+                    if sys_char == 'R':  # GLONASS
                         if 'L2C' in sat_data and not pd.isna(sat_data['L2C']):
                             obs.L[1] = float(sat_data['L2C'])
                         elif 'L2P' in sat_data and not pd.isna(sat_data['L2P']):
