@@ -17,6 +17,7 @@
 # DD factors
 from .dd_pseudorange_factor import DDPseudorangeFactor
 from .dd_carrier_phase_factor import DDCarrierPhaseFactor, DDCarrierPhaseFactorFixed
+from .phase_range_factor import PhaseRangeFactor, DDPhaseRangeFactor, DDPhaseRangeFactorFixed
 from .dd_pseudorange_factor_pose import DDPseudorangePoseFactor
 from .dd_carrier_phase_factor_pose import DDCarrierPhasePoseFactor
 
@@ -37,6 +38,7 @@ from .fix_and_hold_factor import FixAndHoldFactor
 
 __all__ = [
     'DDPseudorangeFactor', 'DDCarrierPhaseFactor', 'DDCarrierPhaseFactorFixed',
+    'PhaseRangeFactor', 'DDPhaseRangeFactor', 'DDPhaseRangeFactorFixed',
     'DDPseudorangePoseFactor', 'DDCarrierPhasePoseFactor',
     'PseudorangePoseFactor', 'PseudorangeWithISBPoseFactor',
     'DoubleDifferencePoseFactor',
