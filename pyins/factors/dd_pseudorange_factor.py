@@ -16,6 +16,7 @@
 
 import numpy as np
 import gtsam
+from typing import Optional, Sequence
 from pyins.core.constants import CLIGHT, FREQ_L1, FREQ_L2, FREQ_L5
 from pyins.observation.measurement_model import troposphere_model, ionosphere_model
 from pyins.coordinate.transforms import ecef2llh
@@ -49,8 +50,10 @@ class DDPseudorangeFactor:
     - Uses RTKLIB eratio for automatic noise model generation
     """
     
-    def __init__(self, position_key, dd_data, base_pos_ecef, reference_llh, 
-                 noise_model=None, use_atmospheric=False, ion_params=None, gps_time=0.0):
+    def __init__(self, position_key, dd_data, base_pos_ecef, reference_llh,
+                 noise_model=None, use_atmospheric=False, ion_params=None, gps_time=0.0,
+                 bias_keys: Optional[Sequence[int]] = None,
+                 bias_coeffs: Optional[Sequence[float]] = None):
         """Initialize DD Pseudorange Factor
         
         Args:
@@ -165,6 +168,14 @@ class DDPseudorangeFactor:
         
         # Store parameters for error function
         self.position_key = position_key
+        if bias_keys is None:
+            self.bias_terms = []
+        else:
+            if bias_coeffs is None:
+                bias_coeffs = [1.0] * len(bias_keys)
+            if len(bias_keys) != len(bias_coeffs):
+                raise ValueError("bias_keys and bias_coeffs must have same length")
+            self.bias_terms = list(zip(bias_keys, bias_coeffs))
         
         # Create noise model if not provided
         if noise_model is None:
@@ -260,7 +271,11 @@ class DDPseudorangeFactor:
                 # We compute how the geometric DD changes from reference
                 # But this is problematic without knowing the reference position...
                 # For now, treat dd_obs as a direct measurement
-                residual = self.dd_measurement - dd_geometric
+            bias_sum = 0.0
+            for key, coeff in self.bias_terms:
+                bias_sum += coeff * v.atDouble(key)
+
+            residual = self.dd_measurement - dd_geometric - bias_sum
             
             # Apply atmospheric corrections if enabled
             if self.use_atmospheric:
@@ -339,8 +354,13 @@ class DDPseudorangeFactor:
                 # Since residual = measured - computed, and measured is constant:
                 # d(residual)/d(rover_enu) = -d(computed)/d(rover_enu) = -H_enu
                 H[0] = -H_enu.reshape(1, 3)
+                for idx, (_, coeff) in enumerate(self.bias_terms):
+                    if len(H) > idx + 1:
+                        H[idx + 1] = np.array([[-coeff]])
             
             return error
         
         # Create and return factor
-        return gtsam.CustomFactor(self.noise_model, [self.position_key], error_func)
+        factor_keys = [self.position_key]
+        factor_keys.extend(key for key, _ in self.bias_terms)
+        return gtsam.CustomFactor(self.noise_model, factor_keys, error_func)
