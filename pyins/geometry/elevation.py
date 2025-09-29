@@ -99,12 +99,8 @@ def compute_elevation_angle(sat_pos: np.ndarray, rcv_pos: np.ndarray, reference_
     >>> elevation = compute_elevation_angle(sat_pos, rcv_pos, ref_llh)
     >>> print(f"Elevation angle: {elevation:.2f}°")
     """
-    # Convert LLH from degrees to radians for ecef2enu
-    reference_llh_rad = np.array([
-        np.radians(reference_llh[0]),  # lat in radians
-        np.radians(reference_llh[1]),  # lon in radians
-        reference_llh[2]                # height in meters
-    ])
+    # reference_llh is expected in radians (lat, lon) and meters (height)
+    reference_llh_rad = np.array([reference_llh[0], reference_llh[1], reference_llh[2]])
     
     # ecef2enu expects the vector from receiver to satellite
     # and the reference LLH in radians

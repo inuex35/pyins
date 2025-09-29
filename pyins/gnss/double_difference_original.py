@@ -20,7 +20,17 @@ Double Difference formation for GNSS observations
 
 import numpy as np
 
-from ..core.constants import CLIGHT, SYS_BDS, SYS_GAL, SYS_GLO, SYS_GPS, SYS_QZS, sat2sys
+from ..core.constants import (
+    CLIGHT,
+    SYS_BDS,
+    SYS_GAL,
+    SYS_GLO,
+    SYS_GPS,
+    SYS_QZS,
+    SYS_SBS,
+    SYS_IRN,
+    sat2sys,
+)
 from ..geometry.elevation import compute_elevation_angle
 from ..gnss.ephemeris import satpos
 
@@ -296,7 +306,15 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
     filtered_sats = []
     for sat in common_sats:
         sys_id = sat2sys(sat)
-        sys_map = {SYS_GPS: 'G', SYS_GLO: 'R', SYS_GAL: 'E', SYS_BDS: 'C', SYS_QZS: 'J'}
+        sys_map = {
+            SYS_GPS: 'G',
+            SYS_GLO: 'R',
+            SYS_GAL: 'E',
+            SYS_BDS: 'C',
+            SYS_QZS: 'J',
+            SYS_SBS: 'S',
+            SYS_IRN: 'I',
+        }
         system_char = sys_map.get(sys_id, 'G')
 
         if system_char in use_systems:
@@ -334,24 +352,39 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
         if base_obs_sat is None:
             continue
 
-        # Get pseudoranges for multiple frequencies
-        # Check L1 and L2 frequencies
+        # Get pseudoranges for available frequencies (up to MAXBAND slots)
         freqs_data = []
-        for freq_idx in [0, 1]:  # L1 and L2
-            rover_pr = obs.P[freq_idx] if freq_idx < len(obs.P) and obs.P[freq_idx] != 0 else None
-            base_pr = base_obs_sat.P[freq_idx] if freq_idx < len(base_obs_sat.P) and base_obs_sat.P[freq_idx] != 0 else None
-            
-            if rover_pr is not None and base_pr is not None:
-                # Apply satellite clock correction to pseudoranges
-                # PR_corrected = PR_raw - c*sat_clk
-                rover_pr_corrected = rover_pr - sat_clk * CLIGHT
-                base_pr_corrected = base_pr - sat_clk * CLIGHT
-                freqs_data.append({
+        max_slots = min(len(obs.P), len(base_obs_sat.P), len(obs.L), len(base_obs_sat.L))
+        for freq_idx in range(max_slots):
+            rover_pr = obs.P[freq_idx]
+            base_pr = base_obs_sat.P[freq_idx]
+
+            if rover_pr == 0.0 or base_pr == 0.0:
+                continue
+
+            rover_phase = obs.L[freq_idx] if freq_idx < len(obs.L) else 0.0
+            base_phase = base_obs_sat.L[freq_idx] if freq_idx < len(base_obs_sat.L) else 0.0
+
+            if rover_phase == 0.0 or base_phase == 0.0:
+                phase_available = False
+            else:
+                phase_available = True
+
+            rover_pr_corrected = rover_pr - sat_clk * CLIGHT
+            base_pr_corrected = base_pr - sat_clk * CLIGHT
+
+            freqs_data.append(
+                {
                     'freq_idx': freq_idx,
                     'rover_pr': rover_pr_corrected,
-                    'base_pr': base_pr_corrected
-                })
-        
+                    'base_pr': base_pr_corrected,
+                    'rover_phase': rover_phase,
+                    'base_phase': base_phase,
+                    'phase_available': phase_available,
+                    'wavelength': obs.get_wavelength(freq_idx) if hasattr(obs, 'get_wavelength') else 0.0,
+                }
+            )
+
         if not freqs_data:
             continue  # No valid frequency data
         
@@ -404,6 +437,27 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                 # Double difference
                 dd = sd_rover - sd_base
 
+                dd_phase_cycles = None
+                wavelength = freq_data.get('wavelength', 0.0)
+                if wavelength:
+                    rover_phase = freq_data.get('rover_phase', 0.0)
+                    base_phase = freq_data.get('base_phase', 0.0)
+                    ref_rover_phase = ref_freq_data.get('rover_phase', 0.0)
+                    ref_base_phase = ref_freq_data.get('base_phase', 0.0)
+
+                    if (
+                        freq_data.get('phase_available')
+                        and ref_freq_data.get('phase_available')
+                        and rover_phase != 0.0
+                        and base_phase != 0.0
+                        and ref_rover_phase != 0.0
+                        and ref_base_phase != 0.0
+                    ):
+                        dd_phase_cycles = (
+                            (rover_phase - ref_rover_phase)
+                            - (base_phase - ref_base_phase)
+                        )
+
                 dd_measurements.append({
                     'sat': sat,
                     'ref_sat': ref_sat,
@@ -413,7 +467,9 @@ def form_double_differences(rover_obs, base_obs, nav_data, gps_time,
                     'sat_clk': data['sat_clk'],
                     'ref_sat_clk': ref_data['sat_clk'],
                     'elevation': data['elevation'],
-                    'freq_idx': freq_idx  # Add frequency index
+                    'freq_idx': freq_idx,  # Add frequency index
+                    'dd_phase_cycles': dd_phase_cycles,
+                    'wavelength': wavelength,
                 })
 
     return dd_measurements

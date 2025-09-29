@@ -58,10 +58,27 @@ Notes:
 
 from typing import Optional, Union
 
+import math
+
 import numpy as np
+
+import cssrlib.ephemeris
+from cssrlib.gnss import gpst2time, gtime_t, time2gpst
 
 from ..core.constants import *
 from ..core.unified_time import TimeCore
+from ..satellite.ephemeris import geph2clk as sat_geph2clk
+from ..satellite.ephemeris import geph2pos as sat_geph2pos
+from ..satellite.satellite_position import ura_value
+
+_WEEK_SECONDS = 604800.0
+
+
+def _to_seconds(value):
+    if isinstance(value, gtime_t):
+        week, tow = time2gpst(value)
+        return week * _WEEK_SECONDS + tow
+    return float(value)
 
 
 def timediff(t1, t2):
@@ -110,6 +127,9 @@ def timediff(t1, t2):
     >>> print(dt)  # 90.0
     """
     # Convert both times to TOW if one is GPS time
+    t1 = _to_seconds(t1)
+    t2 = _to_seconds(t2)
+
     if t1 > 604800:
         t1 = t1 % 604800
     if t2 > 604800:
@@ -292,6 +312,8 @@ def seleph(nav, t, sat):
                 # Ephemerides are sorted by time, so we can break
                 break
 
+        return eph_best
+
     else:
         # GLONASS uses geph and needs full GPS time
         # For GLONASS, prefer past ephemeris over future ones
@@ -302,7 +324,7 @@ def seleph(nav, t, sat):
 
             # GLONASS ephemeris toe is in full GPS time, not TOW
             # So we need to use full GPS time for comparison
-            dt_raw = t_gps - geph.toe
+            dt_raw = t_gps - _to_seconds(geph.toe)
 
             # For GLONASS, prefer past ephemeris (dt_raw >= 0)
             # Add small penalty for future ephemeris
@@ -321,279 +343,96 @@ def seleph(nav, t, sat):
                 # only if we're past the best match
                 if dt_best < 7200.0:  # If we have a good match (< 2 hours)
                     break
+        # Fallback: some CSSR readers may store GLONASS ephemerides in nav.eph
+        # using generic Eph structures. If nothing found in nav.geph, attempt
+        # to locate a matching entry in nav.eph before giving up.
+        if eph_best is None:
+            for eph in nav.eph:
+                if eph.sat != sat:
+                    continue
 
-    return eph_best
+                dt = abs(dtadjust(t_tow, eph.toe))
+                if dt <= dt_best:
+                    dt_best = dt
+                    eph_best = eph
+                else:
+                    break
+
+        return eph_best
+
+
+def _extract_time_seconds(t: Union[float, TimeCore]) -> tuple[float, float]:
+    """Return (gps_seconds, tow) from input time."""
+
+    if hasattr(t, "get_gps_seconds"):
+        gps_seconds = float(t.get_gps_seconds())
+        tow = float(t.get_tow())
+    else:
+        gps_seconds = float(t)
+        if gps_seconds >= _WEEK_SECONDS:
+            tow = gps_seconds % _WEEK_SECONDS
+        else:
+            tow = gps_seconds
+    return gps_seconds, tow
+
+
+def _to_gtime(seconds: float, *, week_hint: int | None = None, reference_seconds: float | None = None):
+    if week_hint is not None and 0.0 <= seconds < _WEEK_SECONDS:
+        week = week_hint
+        tow = seconds
+    elif reference_seconds is not None and 0.0 <= seconds < _WEEK_SECONDS:
+        ref_week = math.floor(reference_seconds / _WEEK_SECONDS)
+        ref_tow = reference_seconds - ref_week * _WEEK_SECONDS
+        week = int(ref_week)
+        tow = seconds
+        delta = tow - ref_tow
+        half_week = _WEEK_SECONDS / 2.0
+        if delta > half_week:
+            week -= 1
+        elif delta < -half_week:
+            week += 1
+    else:
+        week = int(math.floor(seconds / _WEEK_SECONDS))
+        tow = seconds - week * _WEEK_SECONDS
+    return gpst2time(week, tow)
 
 
 def eph2clk(t, eph):
-    """
-    Calculate satellite clock bias from ephemeris
+    """Calculate satellite clock bias using cssrlib."""
 
-    Parameters
-    ----------
-    t : float or TimeCore
-        Time in seconds or TimeCore object:
-        - For GLONASS: Full GPS time
-        - For others: Time of week (GPS TOW)
-        - For BeiDou: Will be converted to BDT internally
-    eph : Ephemeris or GloEphemeris
-        Broadcast ephemeris
+    gps_seconds, tow = _extract_time_seconds(t)
 
-    Returns
-    -------
-    float
-        Satellite clock bias (seconds) in GPS time system
-    """
-    # Handle TimeCore input
-    if hasattr(t, 'get_tow'):
-        # It's a TimeCore object
-        t_tow = t.get_tow()
-        t_gps = t.get_gps_seconds()
+    if hasattr(eph, "taun"):
+        return sat_geph2clk(eph, gps_seconds)
+
+    reference = eph.week * _WEEK_SECONDS + _to_seconds(eph.toc)
+
+    if gps_seconds >= _WEEK_SECONDS:
+        t_cssr = _to_gtime(gps_seconds, reference_seconds=reference)
     else:
-        # It's a float - could be TOW or GPS seconds
-        if t > 604800:
-            t_tow = t % 604800
-            t_gps = t
-        else:
-            t_tow = t
-            # For GLONASS we need full GPS time
-            if hasattr(eph, 'taun'):  # GLONASS
-                # Estimate week from ephemeris toe
-                week = int(eph.toe // 604800)
-                t_gps = week * 604800 + t
-            else:
-                t_gps = t
-    
-    # Check if this is GLONASS ephemeris
-    if hasattr(eph, 'taun'):  # GLONASS ephemeris
-        # GLONASS clock model: dts = -taun + gamn * (t - toe)
-        # Both t and eph.toe are full GPS time
-        ts = t_gps - eph.toe
+        t_cssr = _to_gtime(tow, week_hint=getattr(eph, 'week', None), reference_seconds=reference)
 
-        # Limit time difference
-        if abs(ts) > 3600.0:  # 1 hour for GLONASS
-            return 0.0
-
-        # Iterative calculation (RTKLIB approach)
-        t = ts
-        for _ in range(2):
-            t = ts - (-eph.taun + eph.gamn * t)
-
-        # Return clock bias in seconds
-        return -eph.taun + eph.gamn * t
-
-    # Regular ephemeris (GPS, Galileo, BeiDou, QZSS)
-    # Time difference from time of clock
-    # Use TOW for non-GLONASS systems
-    t_week = t_tow
-
-    # Get satellite system
-    sys = sat2sys(eph.sat)
-
-    # For BeiDou, convert GPS TOW to BDT TOW
-    if sys == SYS_BDS:
-        # BeiDou ephemeris toc is in BDT
-        t_bdt = t_week - GPS_BDS_OFFSET
-        if t_bdt < 0:
-            t_bdt += 604800
-        dt = dtadjust(t_bdt, eph.toc)
-    else:
-        dt = dtadjust(t_week, eph.toc)
-
-    # Limit time difference for extrapolation
-    # Increased limit to handle older ephemeris data
-    if abs(dt) > 604800.0:  # 1 week (was 2 hours)
-        return 0.0
-
-    # Satellite clock polynomial
-    # dts = a0 + a1*dt + a2*dt^2
-    dts = eph.f0 + eph.f1 * dt + eph.f2 * dt * dt
-
-    return dts
+    return float(cssrlib.ephemeris.eph2clk(t_cssr, eph))
 
 
 def eph2pos(t, eph):
-    """
-    Compute satellite position from broadcast ephemeris
+    """Compute satellite position using cssrlib."""
 
-    Parameters
-    ----------
-    t : float or TimeCore
-        Time in seconds or TimeCore object:
-        - For GLONASS: Full GPS time
-        - For GPS/QZSS/Galileo: Time of week (GPS TOW)
-        - For BeiDou: GPS TOW (will be converted to BDT internally)
-    eph : Ephemeris or GloEphemeris
-        Broadcast ephemeris
+    gps_seconds, tow = _extract_time_seconds(t)
 
-    Returns
-    -------
-    rs : np.ndarray
-        Satellite position in ECEF (m)
-    var : float
-        Position variance (m^2)
-    dts : float
-        Satellite clock bias (s) in GPS time system
-    """
-    # Handle TimeCore input
-    if hasattr(t, 'get_tow'):
-        # It's a TimeCore object
-        t_tow = t.get_tow()
-        t_gps = t.get_gps_seconds()
+    if hasattr(eph, "taun"):
+        return sat_geph2pos(eph, gps_seconds)
+
+    reference = eph.week * _WEEK_SECONDS + _to_seconds(eph.toe)
+
+    if gps_seconds >= _WEEK_SECONDS:
+        t_cssr = _to_gtime(gps_seconds, reference_seconds=reference)
     else:
-        # It's a float - could be TOW or GPS seconds
-        if t > 604800:
-            t_tow = t % 604800
-            t_gps = t
-        else:
-            t_tow = t
-            # For GLONASS we need full GPS time, try to reconstruct it
-            # This is a fallback - ideally TimeCore should be used
-            if hasattr(eph, 'taun'):  # GLONASS
-                # Estimate week from ephemeris toe
-                week = int(eph.toe // 604800)
-                t_gps = week * 604800 + t
-            else:
-                t_gps = t
-    
-    # Check if this is GLONASS ephemeris
-    if hasattr(eph, 'taun'):  # GLONASS ephemeris
-        # Import and use the geph2pos function from satellite.ephemeris module
-        from ..satellite.ephemeris import geph2pos
-        # GLONASS needs full GPS time
-        rs, var, dts = geph2pos(eph, t_gps)
-        return rs, var, dts
+        t_cssr = _to_gtime(tow, week_hint=getattr(eph, 'week', None), reference_seconds=reference)
 
-    # Get system-specific constants
-    sys = sat2sys(eph.sat)
-
-    if sys == SYS_GAL:
-        mu = MU_GAL
-        omge = OMGE_GAL
-    elif sys == SYS_BDS:
-        mu = MU_BDS
-        omge = OMGE_BDS
-    else:  # GPS, QZSS
-        mu = MU_GPS
-        omge = OMGE
-
-    # Time from ephemeris reference epoch
-    # Use TOW for non-GLONASS systems
-    t_week = t_tow
-
-    # For BeiDou, convert GPS TOW to BDT TOW
-    if sys == SYS_BDS:
-        # BeiDou ephemeris is stored in BDT
-        # BDT = GPS - 14 seconds
-        t_bdt = t_week - GPS_BDS_OFFSET
-        if t_bdt < 0:
-            t_bdt += 604800
-        tk = dtadjust(t_bdt, eph.toe)
-    else:
-        tk = dtadjust(t_week, eph.toe)
-
-    # Limit time difference
-    if tk > 302400.0:
-        tk -= 604800.0
-    elif tk < -302400.0:
-        tk += 604800.0
-
-    # Mean anomaly
-    n = np.sqrt(mu / eph.A**3)  # Mean motion
-    M = eph.M0 + (n + eph.deln) * tk
-
-    # Kepler's equation for eccentric anomaly
-    E = M
-    for _ in range(30):  # Max iterations
-        E_old = E
-        E = M + eph.e * np.sin(E)
-        if abs(E - E_old) < 1e-13:
-            break
-
-    # True anomaly
-    sinE = np.sin(E)
-    cosE = np.cos(E)
-    v = np.arctan2(np.sqrt(1.0 - eph.e**2) * sinE, cosE - eph.e)
-
-    # Argument of latitude
-    u = v + eph.omg
-
-    # Radius
-    r = eph.A * (1.0 - eph.e * cosE)
-
-    # Inclination
-    i = eph.i0 + eph.idot * tk
-
-    # Corrections
-    sin2u = np.sin(2.0 * u)
-    cos2u = np.cos(2.0 * u)
-
-    u += eph.cus * sin2u + eph.cuc * cos2u
-    r += eph.crs * sin2u + eph.crc * cos2u
-    i += eph.cis * sin2u + eph.cic * cos2u
-
-    # Positions in orbital plane
-    x = r * np.cos(u)
-    y = r * np.sin(u)
-
-    # Check for BeiDou GEO satellites (PRN <= 5 or PRN >= 59)
-    prn = sat2prn(eph.sat)
-
-    # Constants for -5 degree rotation (ref [9] table 4-1)
-    SIN_5 = -0.08715574274765817  # sin(-5 deg)
-    COS_5 = 0.99619469809174553   # cos(-5 deg)
-
-    # Earth-fixed coordinates
-    sini = np.sin(i)
-    cosi = np.cos(i)
-
-    if sys == SYS_BDS and (prn <= 5 or prn >= 59):
-        # BeiDou GEO satellites (C01-C05, C59-C63) need special transformation
-        # Following RTKLIB ephpos.c exactly (ref [9] table 4-1)
-
-        # Use O = OMG0 + OMGd * tk - omge * toes for BeiDou GEO
-        O = eph.OMG0 + eph.OMGd * tk - omge * eph.toes
-        sinO, cosO = np.sin(O), np.cos(O)
-
-        # Compute position without earth rotation first
-        xg = x * cosO - y * cosi * sinO
-        yg = x * sinO + y * cosi * cosO
-        zg = y * sini
-
-        # Earth rotation
-        ome = omge * tk
-        sino = np.sin(ome)
-        coso = np.cos(ome)
-
-        # Apply -5 degree rotation for BeiDou GEO satellites
-        rs = np.array([
-            xg * coso + yg * sino * COS_5 + zg * sino * SIN_5,
-            -xg * sino + yg * coso * COS_5 + zg * coso * SIN_5,
-            -yg * SIN_5 + zg * COS_5
-        ])
-    else:
-        # Standard transformation for other satellites (including BeiDou MEO and IGSO)
-        # Note: BeiDou MEO and IGSO satellites use standard transformation without -5 deg rotation
-        # Use O = OMG0 + (OMGd - omge) * tk - omge * toes for standard satellites
-        O = eph.OMG0 + (eph.OMGd - omge) * tk - omge * eph.toes
-        sinO, cosO = np.sin(O), np.cos(O)
-
-        rs = np.array([
-            x * cosO - y * cosi * sinO,
-            x * sinO + y * cosi * cosO,
-            y * sini
-        ])
-
-    # Satellite clock bias
-    dts = eph2clk(t, eph)
-
-    # Relativistic correction
-    dts -= 2.0 * np.sqrt(mu * eph.A) * eph.e * sinE / CLIGHT**2
-
-    # Variance (simplified - should use URA)
-    var = 3.0**2  # 3m standard deviation
-
-    return rs, var, dts
+    rs, dts = cssrlib.ephemeris.eph2pos(t_cssr, eph)
+    var = ura_value(eph.sva) ** 2
+    return np.asarray(rs, dtype=float), var, float(dts)
 
 
 def satpos(obs, nav):
