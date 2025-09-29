@@ -63,7 +63,7 @@ import math
 import numpy as np
 
 import cssrlib.ephemeris
-from cssrlib.gnss import gpst2time, gtime_t, time2gpst
+from cssrlib.gnss import gpst2time, bdt2time, gtime_t, time2gpst, timeadd
 
 from ..core.constants import *
 from ..core.unified_time import TimeCore
@@ -291,6 +291,8 @@ def seleph(nav, t, sat):
     sys = sat2sys(sat)
 
     if sys != SYS_GLO:
+        if sys == SYS_BDS:
+            t_tow = (t_tow - GPS_BDS_OFFSET) % _WEEK_SECONDS
         # GPS, Galileo, BeiDou, QZSS, etc. - use TOW
         for eph in nav.eph:
             if eph.sat != sat:
@@ -367,6 +369,9 @@ def _extract_time_seconds(t: Union[float, TimeCore]) -> tuple[float, float]:
     if hasattr(t, "get_gps_seconds"):
         gps_seconds = float(t.get_gps_seconds())
         tow = float(t.get_tow())
+    elif isinstance(t, gtime_t):
+        week, tow = time2gpst(t)
+        gps_seconds = week * _WEEK_SECONDS + tow
     else:
         gps_seconds = float(t)
         if gps_seconds >= _WEEK_SECONDS:
@@ -400,6 +405,11 @@ def _to_gtime(seconds: float, *, week_hint: int | None = None, reference_seconds
 def eph2clk(t, eph):
     """Calculate satellite clock bias using cssrlib."""
 
+    if isinstance(t, gtime_t):
+        if hasattr(eph, "taun"):
+            return float(cssrlib.ephemeris.geph2clk(t, eph))
+        return float(cssrlib.ephemeris.eph2clk(t, eph))
+
     gps_seconds, tow = _extract_time_seconds(t)
 
     if hasattr(eph, "taun"):
@@ -417,6 +427,21 @@ def eph2clk(t, eph):
 
 def eph2pos(t, eph):
     """Compute satellite position using cssrlib."""
+
+    if isinstance(t, gtime_t):
+        if hasattr(eph, "taun"):
+            result = cssrlib.ephemeris.geph2pos(t, eph)
+            if isinstance(result, tuple) and len(result) == 2:
+                rs, dts = result
+                var = ERREPH_GLO**2
+                return np.asarray(rs, dtype=float), var, float(dts)
+            elif isinstance(result, tuple) and len(result) == 3:
+                rs, _, dts = result
+                var = ERREPH_GLO**2
+                return np.asarray(rs, dtype=float), var, float(dts)
+        rs, dts = cssrlib.ephemeris.eph2pos(t, eph)
+        var = ura_value(eph.sva) ** 2
+        return np.asarray(rs, dtype=float), var, float(dts)
 
     gps_seconds, tow = _extract_time_seconds(t)
 
