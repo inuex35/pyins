@@ -19,6 +19,8 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 
+from cssrlib.gnss import Eph
+
 from pyins.coordinate import ecef2llh, llh2ecef
 from pyins.core import GNSSTime, NavigationData
 from pyins.fusion import GNSSIMUFilter, NavigationState
@@ -175,30 +177,35 @@ def main():
     current_time = GNSSTime.from_datetime(datetime.now())
 
     for i in range(8):  # 8 satellites
-        eph = Ephemeris(
-            sat=i+1,
-            iode=0, iodc=0, sva=0, svh=0,
-            week=current_time.week,
-            toe=current_time.tow,
-            toc=current_time.tow,
-            ttr=current_time.tow,
-            A=26559755.0**2,
-            e=0.001,
-            i0=0.98 + i * 0.1,
-            OMG0=i * 0.785,
-            omg=1.0,
-            M0=i * 0.785,
-            deln=0.0,
-            OMGd=-8.0e-12,
-            idot=0.0,
-            crc=0.0, crs=0.0,
-            cuc=0.0, cus=0.0,
-            cic=0.0, cis=0.0,
-            toes=current_time.tow,
-            fit=4.0,
-            f0=1e-10 * i,
-            f1=0.0, f2=0.0
-        )
+        eph = Eph(i + 1)
+        eph.iode = 0
+        eph.iodc = 0
+        eph.sva = 0
+        eph.svh = 0
+        eph.week = current_time.week
+        eph.toe = current_time.tow
+        eph.toc = current_time.tow
+        eph.ttr = current_time.tow
+        eph.A = 26559755.0**2
+        eph.e = 0.001
+        eph.i0 = 0.98 + i * 0.1
+        eph.OMG0 = i * 0.785
+        eph.omg = 1.0
+        eph.M0 = i * 0.785
+        eph.deln = 0.0
+        eph.OMGd = -8.0e-12
+        eph.idot = 0.0
+        eph.crc = 0.0
+        eph.crs = 0.0
+        eph.cuc = 0.0
+        eph.cus = 0.0
+        eph.cic = 0.0
+        eph.cis = 0.0
+        eph.toes = current_time.tow
+        eph.fit = 4.0
+        eph.af0 = 1e-10 * i
+        eph.af1 = 0.0
+        eph.af2 = 0.0
         nav_data.eph.append(eph)
 
     # Generate GNSS observations

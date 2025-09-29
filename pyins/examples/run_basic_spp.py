@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pyins.coordinate import ecef2llh
 from pyins.core.constants import sat2sys, sys2char
 from pyins.examples.basic_spp import single_point_positioning
-from pyins.io.rinex import RinexNavReader, RinexObsReader
+from pyins.io import RinexNavReader, RinexObsReader
 
 
 def main():

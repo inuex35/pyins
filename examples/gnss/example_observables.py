@@ -22,7 +22,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pyins.io.rinex import RinexObsReader
+from pyins.io import RinexObsReader
 from pyins.core.constants import CLIGHT, FREQ_L1, FREQ_L2
 
 

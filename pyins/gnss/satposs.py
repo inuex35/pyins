@@ -3,7 +3,11 @@ Satellite position computation with transmission time correction (RTKLIB-style)
 """
 
 import numpy as np
+from cssrlib.ephemeris import satpos as cssr_satpos
+from cssrlib.gnss import gpst2time, gpst2bdt, gpst2utc, timeadd
 from .ephemeris import compute_satellite_position
+from .utils import to_cssrlib_sat_num
+from ..core.constants import sat2sys, sys2char
 
 # Speed of light (m/s)
 CLIGHT = 299792458.0
@@ -62,6 +66,8 @@ def satposs(obs_list, nav_data, obs_time=None):
         else:
             raise ValueError("Cannot determine observation time")
 
+    cssr_nav = getattr(nav_data, 'raw_nav', None)
+
     for i, obs in enumerate(obs_list):
         # Get pseudorange (prefer C1/P1 on L1)
         pr = 0
@@ -77,6 +83,35 @@ def satposs(obs_list, nav_data, obs_time=None):
         # Step 1: Calculate transmission time by signal travel time
         # t_tx = obs_time - pr/c
         t_tx = obs_time - pr / CLIGHT
+
+        if cssr_nav is not None:
+            cssr_sat = to_cssrlib_sat_num(obs.sat)
+            if cssr_sat > 0:
+                week = int(obs_time // 604800)
+                tow = obs_time - week * 604800.0
+                t_obs = gpst2time(week, tow)
+                sys_char = sys2char(sat2sys(obs.sat)).strip()
+
+                if sys_char == 'C':
+                    t_obs = gpst2bdt(t_obs)
+                elif sys_char == 'R':
+                    t_obs = gpst2utc(t_obs)
+                    t_obs = timeadd(t_obs, 10800.0)
+
+                t_tx_gtime = timeadd(t_obs, -pr / CLIGHT)
+
+                rs_cssr, _, dts_cssr, svh_cssr = cssr_satpos(cssr_sat, t_tx_gtime, cssr_nav)
+                if (
+                    rs_cssr is not None
+                    and dts_cssr is not None
+                    and not np.isnan(rs_cssr).any()
+                    and not np.isnan(dts_cssr).any()
+                ):
+                    rs[i, :] = rs_cssr[0]
+                    dts[i] = dts_cssr[0]
+                    var[i] = 0.0
+                    svh[i] = svh_cssr[0]
+                    continue
 
         # Step 2: Get initial satellite position and clock at transmission time
         pos_init, clk_init, eph_var = compute_satellite_position(obs.sat, t_tx, nav_data)

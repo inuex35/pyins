@@ -29,7 +29,7 @@ from pyins.coordinate import ecef2llh
 from pyins.core.constants import SYS_GLO, sat2sys, sys2char
 from pyins.core.unified_time import TimeCore
 from pyins.gnss.spp_robust import robust_spp_solve
-from pyins.io.rinex import RinexNavReader, RinexObsReader
+from pyins.io import RinexNavReader, RinexObsReader
 
 
 def run_multi_gnss_spp(obs_file: str, nav_file: str,

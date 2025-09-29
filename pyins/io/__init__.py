@@ -75,10 +75,18 @@ from .imu_reader import (
     sync_gnss_imu,
 )
 from .rinex import RinexNavReader, RinexObsReader
+from .rtklib_pos import (
+    PosRecord,
+    parse_rinex_approx_position,
+    read_rtklib_pos,
+    reference_position_from_pos,
+)
 from .velocity_reader import VelocityReader
 
 __all__ = [
     'RinexObsReader', 'RinexNavReader',
     'IMUReader', 'IMUPreprocessor', 'VelocityReader',
-    'load_imu_data', 'preprocess_imu_data', 'sync_gnss_imu'
+    'load_imu_data', 'preprocess_imu_data', 'sync_gnss_imu',
+    'PosRecord', 'parse_rinex_approx_position',
+    'read_rtklib_pos', 'reference_position_from_pos'
 ]

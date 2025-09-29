@@ -22,7 +22,7 @@ from pyins.core.constants import SYS_GPS
 from pyins.core.data_structures import NavigationData, Observation
 from pyins.core.unified_time import TimeCore
 from pyins.gnss.spp import single_point_positioning
-from pyins.io.rinex import RinexNavReader, RinexObsReader
+from pyins.io import RinexNavReader, RinexObsReader
 
 
 def main():

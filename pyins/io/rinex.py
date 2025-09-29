@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List
+from copy import deepcopy
 
 import numpy as np
 
@@ -45,6 +46,8 @@ class RinexNavReader:
         decoder.decode_nav(str(self.filename), nav, append=False)
 
         nav_data = NavigationData()
+        # Keep a cssrlib-native copy before we remap satellite numbering for pyins
+        nav_data.raw_nav = deepcopy(nav)
         nav_data.eph = [self._remap_satellite(eph) for eph in nav.eph]
         nav_data.geph = [self._remap_satellite(geph) for geph in nav.geph]
         nav_data.peph = list(nav.peph)
@@ -143,6 +146,19 @@ class RinexObsReader:
 
             epoch_obs: List[Observation] = []
             for idx, sat in enumerate(obs.sat):
+                sat_id = sat2id(sat)
+                new_sat = int(sat)
+                if sat_id and len(sat_id) >= 2:
+                    sys_char = sat_id[0]
+                    try:
+                        prn = int(sat_id[1:])
+                    except ValueError:
+                        prn = 0
+                    sys = char2sys(sys_char)
+                    mapped_sat = prn2sat(prn, sys)
+                    if mapped_sat:
+                        new_sat = mapped_sat
+
                 P = _ensure_array(obs.P[idx], MAXBAND)
                 L = _ensure_array(obs.L[idx], MAXBAND)
                 S = _ensure_array(obs.S[idx], MAXBAND)
@@ -153,8 +169,8 @@ class RinexObsReader:
                 epoch_obs.append(
                     Observation(
                         time=gps_seconds,
-                        sat=int(sat),
-                        system=sat2sys(int(sat)),
+                        sat=new_sat,
+                        system=sat2sys(new_sat),
                         L=L,
                         P=P,
                         D=D,

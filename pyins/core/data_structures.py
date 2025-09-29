@@ -19,6 +19,13 @@ from enum import Enum
 
 import numpy as np
 
+from cssrlib.gnss import Eph
+from cssrlib.gnss import Geph
+
+# Compatibility aliases for legacy imports
+Ephemeris = Eph
+GloEphemeris = Geph
+
 from .constants import *
 
 
@@ -170,201 +177,6 @@ class Observation:
 
 
 @dataclass
-class Ephemeris:
-    """Satellite ephemeris data for GPS/Galileo/BeiDou/QZSS navigation messages.
-
-    This class contains broadcast ephemeris parameters needed for satellite
-    position and clock computation using Keplerian orbital elements.
-
-    Attributes
-    ----------
-    sat : int
-        Satellite number (internal numbering system)
-    iode : int
-        Issue of Data Ephemeris
-    iodc : int
-        Issue of Data Clock
-    sva : int
-        SV accuracy (URA index for GPS/QZSS, SISA for Galileo, URAI for BeiDou)
-    svh : int
-        SV health flag
-    week : int
-        GPS week number (or system equivalent)
-    code : int
-        Code on L2 (GPS), data source (BeiDou), spare (Galileo)
-    flag : int
-        L2 P data flag (GPS), navigation type (BeiDou), spare (Galileo)
-    toe : float
-        Time of ephemeris reference epoch (seconds in week)
-    toc : float
-        Time of clock reference epoch (seconds in week)
-    ttr : float
-        Transmission time (seconds in week)
-    A : float
-        Semi-major axis (meters)
-    e : float
-        Eccentricity (dimensionless)
-    i0 : float
-        Inclination angle at reference epoch (radians)
-    OMG0 : float
-        Longitude of ascending node at weekly epoch (radians)
-    omg : float
-        Argument of perigee (radians)
-    M0 : float
-        Mean anomaly at reference epoch (radians)
-    deln : float
-        Mean motion difference from computed value (radians/second)
-    OMGd : float
-        Rate of right ascension (radians/second)
-    idot : float
-        Rate of inclination angle (radians/second)
-    crc : float
-        Amplitude of cosine harmonic correction term to orbit radius (meters)
-    crs : float
-        Amplitude of sine harmonic correction term to orbit radius (meters)
-    cuc : float
-        Amplitude of cosine harmonic correction term to argument of latitude (radians)
-    cus : float
-        Amplitude of sine harmonic correction term to argument of latitude (radians)
-    cic : float
-        Amplitude of cosine harmonic correction term to inclination (radians)
-    cis : float
-        Amplitude of sine harmonic correction term to inclination (radians)
-    toes : float
-        Time of ephemeris (seconds in week, for convenience)
-    fit : float
-        Fit interval (hours)
-    f0 : float
-        SV clock bias (seconds)
-    f1 : float
-        SV clock drift (seconds/second)
-    f2 : float
-        SV clock drift rate (seconds/second²)
-    tgd : np.ndarray
-        Group delay parameters, shape (4,)
-    system : int
-        Satellite system (automatically set in __post_init__)
-
-    Notes
-    -----
-    The ephemeris data follows the standard broadcast navigation message format.
-    System-specific variations are handled appropriately for each GNSS.
-    """
-    sat: int                # satellite number
-    iode: int              # issue of data ephemeris
-    iodc: int              # issue of data clock
-    sva: int               # SV accuracy (URA index)
-    svh: int               # SV health
-    week: int              # GPS week
-    code: int              # GPS/GAL: code on L2, BDS: data source
-    flag: int              # GPS/GAL: L2 P data flag, BDS: nav type
-
-    toe: float             # time of ephemeris (s)
-    toc: float             # time of clock (s)
-    ttr: float             # transmission time (s)
-
-    A: float               # orbit semi-major axis (m)
-    e: float               # eccentricity
-    i0: float              # inclination angle at ref time (rad)
-    OMG0: float            # longitude of ascending node (rad)
-    omg: float             # argument of perigee (rad)
-    M0: float              # mean anomaly at ref time (rad)
-    deln: float            # mean motion difference (rad/s)
-    OMGd: float            # rate of ascending node (rad/s)
-    idot: float            # rate of inclination (rad/s)
-
-    crc: float             # radius cosine correction (m)
-    crs: float             # radius sine correction (m)
-    cuc: float             # latitude cosine correction (rad)
-    cus: float             # latitude sine correction (rad)
-    cic: float             # inclination cosine correction (rad)
-    cis: float             # inclination sine correction (rad)
-
-    toes: float            # toe (s) in week
-    fit: float             # fit interval (h)
-    f0: float              # SV clock offset (s)
-    f1: float              # SV clock drift (s/s)
-    f2: float              # SV clock drift rate (s/s2)
-
-    tgd: np.ndarray = field(default_factory=lambda: np.zeros(4))  # group delay
-
-    def __post_init__(self):
-        self.system = sat2sys(self.sat)
-
-
-@dataclass
-class GloEphemeris:
-    """GLONASS broadcast ephemeris data.
-
-    GLONASS uses a different ephemeris format compared to GPS/Galileo/BeiDou,
-    providing satellite position, velocity, and acceleration directly rather
-    than Keplerian orbital elements.
-
-    Attributes
-    ----------
-    sat : int
-        Satellite number (internal numbering system)
-    iode : int
-        Issue of Data Ephemeris (bits 0-6 of tb field)
-    frq : int
-        GLONASS frequency channel number (-7 to +13)
-    svh : int
-        Extended satellite health (bit 3: ln, bit 2: Cn_a, bit 1: Cn, bit 0: Bn)
-    flags : int
-        Status flags (bits 7-8: M, bit 6: P4, bit 5: P3, bit 4: P2, bits 2-3: P1, bits 0-1: P)
-    sva : int
-        Satellite accuracy index
-    age : int
-        Age of operation information (days)
-    toe : float
-        Epoch of ephemeris (GPS time seconds)
-    tof : float
-        Message frame time (GPS time seconds)
-    pos : np.ndarray
-        Satellite position in ECEF coordinates (meters), shape (3,)
-    vel : np.ndarray
-        Satellite velocity in ECEF coordinates (meters/second), shape (3,)
-    acc : np.ndarray
-        Satellite acceleration in ECEF coordinates (meters/second²), shape (3,)
-    taun : float
-        Satellite clock bias relative to GLONASS time (seconds)
-    gamn : float
-        Relative frequency bias (dimensionless)
-    dtaun : float
-        Time difference between L1 and L2 signals (seconds)
-    system : int
-        Satellite system (automatically set to SYS_GLO in __post_init__)
-
-    Notes
-    -----
-    Based on RTKLIB geph_t structure. GLONASS ephemeris provides direct state vectors
-    rather than orbital elements, requiring different algorithms for satellite
-    position computation.
-    """
-    sat: int                # satellite number
-    iode: int              # IODE (0-6 bit of tb field)
-    frq: int               # Satellite frequency number (-7 to 13)
-    svh: int               # Extended SVH (bit 3:ln, bit 2:Cn_a, bit 1:Cn, bit 0:Bn)
-    flags: int             # Status flags (bits 7 8:M, bit 6:P4, bit 5:P3, bit 4:P2, bits 2 3:P1, bits 0 1:P)
-    sva: int               # satellite accuracy
-    age: int               # age of operation
-
-    toe: float             # epoch of ephemeris (GPST)
-    tof: float             # message frame time (GPST)
-
-    pos: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite position (ECEF, m)
-    vel: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite velocity (ECEF, m/s)
-    acc: np.ndarray = field(default_factory=lambda: np.zeros(3))     # satellite acceleration (ECEF, m/s^2)
-
-    taun: float = 0.0      # SV clock bias (s)
-    gamn: float = 0.0      # relative freq bias
-    dtaun: float = 0.0     # delay between L1 and L2 (s)
-
-    def __post_init__(self):
-        self.system = SYS_GLO
-
-
-@dataclass
 class NavigationData:
     """Container for all navigation data including ephemerides and correction parameters.
 
@@ -373,9 +185,9 @@ class NavigationData:
 
     Attributes
     ----------
-    eph : list[Ephemeris]
+    eph : list[Eph]
         List of broadcast ephemerides for GPS/Galileo/BeiDou/QZSS satellites
-    geph : list[GloEphemeris]
+    geph : list[Geph]
         List of GLONASS broadcast ephemerides
     peph : list
         List of precise ephemeris data (for high-precision applications)
@@ -399,8 +211,8 @@ class NavigationData:
     The ionospheric and UTC parameters are broadcast in the navigation messages
     and used for single-frequency positioning and time conversion.
     """
-    eph: list[Ephemeris] = field(default_factory=list)
-    geph: list[GloEphemeris] = field(default_factory=list)  # GLONASS ephemeris
+    eph: list[Eph] = field(default_factory=list)
+    geph: list[Geph] = field(default_factory=list)  # GLONASS ephemeris
     peph: list = field(default_factory=list)  # Precise ephemeris
     pclk: list = field(default_factory=list)  # Precise clock
 
@@ -411,6 +223,8 @@ class NavigationData:
     utc_gps: np.ndarray = field(default_factory=lambda: np.zeros(4))   # GPS UTC parameters
     utc_gal: np.ndarray = field(default_factory=lambda: np.zeros(4))   # Galileo UTC parameters
     utc_bds: np.ndarray = field(default_factory=lambda: np.zeros(4))   # BeiDou UTC parameters
+
+    raw_nav: object | None = None  # Original cssrlib Nav instance (if available)
 
     def find_eph(self, sat, time):
         """Find broadcast ephemeris for satellite at given time.
@@ -441,7 +255,8 @@ class NavigationData:
         for eph in self.eph:
             if eph.sat != sat:
                 continue
-            dt = abs(time - eph.toe)
+            toe = eph.toe if isinstance(eph.toe, (int, float)) else eph.toe.time + eph.toe.sec
+            dt = abs(time - toe)
             if dt < min_dt:
                 min_dt = dt
                 best_eph = eph
@@ -477,7 +292,8 @@ class NavigationData:
         for geph in self.geph:
             if geph.sat != sat:
                 continue
-            dt = abs(time - geph.toe)
+            toe = geph.toe if isinstance(geph.toe, (int, float)) else geph.toe.time + geph.toe.sec
+            dt = abs(time - toe)
             if dt < min_dt:
                 min_dt = dt
                 best_geph = geph

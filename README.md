@@ -11,7 +11,7 @@ pip install -e .
 ## Data Loading
 
 ```python
-from pyins.io.rinex import RinexObsReader, RinexNavReader
+from pyins.io import RinexObsReader, RinexNavReader
 
 # Load observation data
 obs_reader = RinexObsReader('data/main.obs')

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from pyins.gnss.frequency import sat2freq
-from pyins.io.rinex import RinexObsReader
+from pyins.io import RinexObsReader
 from pyins.core.constants import (
     CLIGHT, SYS_GPS, SYS_GLO, SYS_GAL, SYS_BDS, SYS_QZS,
     FREQ_L1, FREQ_L2, FREQ_L5

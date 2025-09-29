@@ -27,7 +27,7 @@ import numpy as np
 from pyins.coordinate import ecef2llh
 from pyins.core.constants import SYS_GLO, sat2sys, sys2char
 from pyins.gnss.spp_robust import robust_spp_solve
-from pyins.io.rinex import RinexNavReader, RinexObsReader
+from pyins.io import RinexNavReader, RinexObsReader
 
 
 def process_all_epochs(obs_file: str, nav_file: str,

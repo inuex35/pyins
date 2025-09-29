@@ -16,199 +16,62 @@
 
 from typing import Optional
 
+import math
+
 import numpy as np
+
+import cssrlib.ephemeris
+from cssrlib.gnss import gpst2time
 
 from ..core.constants import *
 from ..core.data_structures import Ephemeris, GloEphemeris, NavigationData
 
+_WEEK_SECONDS = 604800.0
+
+
+def _to_gtime(seconds: float, *, week_hint: int | None = None, reference_seconds: float | None = None):
+    if week_hint is not None and 0.0 <= seconds < _WEEK_SECONDS:
+        week = week_hint
+        tow = seconds
+    elif reference_seconds is not None and 0.0 <= seconds < _WEEK_SECONDS:
+        ref_week = math.floor(reference_seconds / _WEEK_SECONDS)
+        ref_tow = reference_seconds - ref_week * _WEEK_SECONDS
+        week = int(ref_week)
+        tow = seconds
+        delta = tow - ref_tow
+        half_week = _WEEK_SECONDS / 2.0
+        if delta > half_week:
+            week -= 1
+        elif delta < -half_week:
+            week += 1
+    else:
+        week = int(math.floor(seconds / _WEEK_SECONDS))
+        tow = seconds - week * _WEEK_SECONDS
+    return gpst2time(week, tow)
+
 
 def geph2clk(geph: GloEphemeris, time: float) -> float:
-    """
-    GLONASS ephemeris to satellite clock bias
+    """Compute GLONASS satellite clock bias using cssrlib."""
 
-    Parameters:
-    -----------
-    geph : GloEphemeris
-        GLONASS ephemeris
-    time : float
-        Time of interest (GPST)
-
-    Returns:
-    --------
-    dts : float
-        Satellite clock bias (s)
-    """
-    t = time - geph.toe
-
-    # Iterative solution for clock bias
-    ts = t
-    for _i in range(2):
-        t = ts - (-geph.taun + geph.gamn * t)
-
-    return -geph.taun + geph.gamn * t
+    t_cssr = _to_gtime(time, reference_seconds=geph.toe)
+    return float(cssrlib.ephemeris.geph2clk(t_cssr, geph))
 
 
 def geph2pos(geph: GloEphemeris, time: float) -> tuple[np.ndarray, float, float]:
-    """
-    Compute GLONASS satellite position and clock bias from ephemeris data.
+    """Compute GLONASS satellite position using cssrlib."""
 
-    This function calculates the satellite position in Earth-Centered Earth-Fixed
-    (ECEF) coordinates and clock bias using GLONASS broadcast ephemeris data.
-    It includes automatic time correction for cases where Time of Week (TOW)
-    is provided instead of full GPS time.
+    t_cssr = _to_gtime(time, reference_seconds=geph.toe)
+    result = cssrlib.ephemeris.geph2pos(t_cssr, geph)
 
-    Parameters
-    ----------
-    geph : GloEphemeris
-        GLONASS ephemeris containing orbital parameters, position, velocity,
-        acceleration, and clock parameters
-    time : float
-        Time of interest in GPS time (seconds)
-
-    Returns
-    -------
-    tuple[np.ndarray, float, float]
-        - rs : np.ndarray, shape (3,)
-            Satellite position in ECEF coordinates (meters)
-        - var : float
-            Position variance (m²), based on GLONASS error model
-        - dts : float
-            Satellite clock bias (seconds)
-
-    Notes
-    -----
-    The function implements:
-    - Automatic time correction for TOW vs full GPS time discrepancies
-    - Numerical integration of GLONASS differential equations
-    - GLONASS-specific clock correction model
-    - Error checking for large time differences (>1 hour)
-
-    If the time difference exceeds 1 hour, the function attempts to correct
-    for TOW/GPS time confusion. If correction fails, returns zero position
-    with high variance.
-
-    Examples
-    --------
-    >>> pos, var, clk_bias = geph2pos(glonass_eph, gps_time)
-    >>> print(f"Position: {pos} m, Clock bias: {clk_bias*1e9} ns")
-    """
-    t = time - geph.toe
-    
-    # Safety check: if time difference is too large, something is wrong
-    if abs(t) > 3600:  # More than 1 hour
-        # Time might be TOW instead of full GPS time
-        # Try to recover by converting TOW to full GPS time
-        week_seconds = (geph.toe // 604800) * 604800
-        time_full = week_seconds + time
-        t_corrected = time_full - geph.toe
-        if abs(t_corrected) < 3600:
-            t = t_corrected
-        else:
-            # Can't recover, return zero position
-            return np.zeros(3), 1e10, 0.0
-    
-    dts = -geph.taun + geph.gamn * t
-    x = np.array((*geph.pos, *geph.vel))
-
-    # Debug trace (commented out)
-    # trace(4, 'geph2pos: sat=%d\n' % geph.sat)
-    tt = -TSTEP if t < 0 else TSTEP
-    while abs(t) > 1E-5:  #1E-9
-        if abs(t) < TSTEP:
-            tt = t
-        x = glorbit(tt, x, geph.acc)
-        t -= tt
+    if len(result) == 2:
+        rs, dts = result
+    else:
+        rs, _, dts = result
 
     var = ERREPH_GLO**2
-    return x[0:3], var, dts
+    return np.asarray(rs, dtype=float), var, float(dts)
 
 
-def glorbit(t: float, x: np.ndarray, acc: np.ndarray) -> np.ndarray:
-    """
-    Integrate GLONASS satellite position and velocity using Runge-Kutta 4th order method.
-
-    This function performs numerical integration of GLONASS orbital equations
-    using the 4th-order Runge-Kutta method to propagate satellite state.
-
-    Parameters
-    ----------
-    t : float
-        Integration time step (seconds)
-    x : np.ndarray
-        State vector [px, py, pz, vx, vy, vz] where:
-        - px, py, pz: position components (m)
-        - vx, vy, vz: velocity components (m/s)
-    acc : np.ndarray
-        Acceleration vector [ax, ay, az] (m/s²)
-
-    Returns
-    -------
-    np.ndarray
-        Updated state vector after integration
-
-    Notes
-    -----
-    This function implements the same algorithm as RTKLIB's glorbit function
-    for GLONASS satellite orbit propagation using numerical integration.
-    """
-    k1 = deq(x, acc)
-    w =x + k1 * t / 2
-    k2 = deq(w, acc)
-    w = x + k2 * t / 2
-    k3 = deq(w, acc)
-    w = x + k3 * t
-    k4 = deq(w, acc)
-    x += (k1 + 2 * k2 + 2 * k3 + k4) * t / 6
-    return x
-
-
-def deq(x: np.ndarray, acc: np.ndarray) -> np.ndarray:
-    """
-    Compute derivatives for GLONASS orbital differential equations.
-
-    This function calculates the time derivatives of position and velocity
-    for GLONASS satellite orbit propagation, including Earth's gravitational
-    field effects and perturbations.
-
-    Parameters
-    ----------
-    x : np.ndarray
-        State vector [px, py, pz, vx, vy, vz] where:
-        - px, py, pz: position components (m)
-        - vx, vy, vz: velocity components (m/s)
-    acc : np.ndarray
-        Acceleration vector [ax, ay, az] (m/s²)
-
-    Returns
-    -------
-    np.ndarray
-        State derivatives [dpx/dt, dpy/dt, dpz/dt, dvx/dt, dvy/dt, dvz/dt]
-
-    Notes
-    -----
-    The differential equations include:
-    - Central gravitational acceleration
-    - J2 zonal harmonic perturbation
-    - Earth rotation effects (Coriolis and centrifugal forces)
-    - External accelerations (solar radiation pressure, etc.)
-
-    The implementation follows the PZ-90.02 coordinate system used by GLONASS.
-    """
-    xdot = np.zeros(6)
-    r2 = np.dot(x[0:3], x[0:3])
-    if r2 <= 0.0:
-        return xdot
-    r3 = r2 * np.sqrt(r2)
-    omg2 = OMGE_GLO**2
-
-    a = 1.5 * J2_GLO * MU_GLO * RE_GLO**2 / r2 / r3
-    b = 5.0 * x[2]**2 / r2
-    c = -MU_GLO / r3 - a * (1.0 - b)
-    xdot[0:3] = x[3:6]
-    xdot[3] = (c + omg2) * x[0] + 2.0 * OMGE_GLO * x[4] + acc[0]
-    xdot[4] = (c + omg2) * x[1] - 2.0 * OMGE_GLO * x[3] + acc[1]
-    xdot[5] = (c - 2.0 * a) * x[2] + acc[2]
-    return xdot
 
 def select_glonass_ephemeris(nav: NavigationData, sat: int, time: float) -> Optional[GloEphemeris]:
     """

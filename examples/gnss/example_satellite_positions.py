@@ -22,7 +22,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pyins.io.rinex import RinexObsReader, RinexNavReader
+from pyins.io import RinexObsReader, RinexNavReader
 from pyins.gnss.satellite_positions import compute_satellite_info
 from pyins.core.constants import CLIGHT
 

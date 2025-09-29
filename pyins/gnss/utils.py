@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GNSS utility functions based on rtklib-py.
+"""GNSS utility functions backed by cssrlib implementations.
 
 This module provides essential utility functions for GNSS processing, including coordinate
 transformations, geometric calculations, satellite visibility analysis, and satellite
@@ -37,7 +37,10 @@ Notes:
 
 import numpy as np
 
-from ..coordinate.transforms import ecef2llh
+import cssrlib.gnss
+from cssrlib.gnss import id2sat
+
+from pyins.core.constants import sat2prn, sat2sys, sys2char
 
 
 def ecef2pos(r):
@@ -73,7 +76,7 @@ def ecef2pos(r):
     >>> print(f"Lon: {np.degrees(llh_pos[1]):.6f}°")
     >>> print(f"Height: {llh_pos[2]:.3f} m")
     """
-    return ecef2llh(r)
+    return cssrlib.gnss.ecef2pos(np.asarray(r, dtype=float))
 
 
 def geodist(rs, rr):
@@ -114,15 +117,8 @@ def geodist(rs, rr):
     >>> print(f"Distance: {distance:.3f} km")
     >>> print(f"Unit vector: {unit_vector}")
     """
-    e = rs - rr
-    r = np.linalg.norm(e)
-
-    if r <= 0:
-        return -1, np.zeros(3)
-
-    e = e / r
-
-    return r, e
+    r, e = cssrlib.gnss.geodist(np.asarray(rs, dtype=float), np.asarray(rr, dtype=float))
+    return float(r), e
 
 
 def satazel(pos, e):
@@ -172,29 +168,9 @@ def satazel(pos, e):
     >>> print(f"Azimuth: {np.degrees(azimuth):.1f}°")
     >>> print(f"Elevation: {np.degrees(elevation):.1f}°")
     """
-    lat = pos[0]
-    lon = pos[1]
-
-    # Rotation matrix from ECEF to ENU
-    sin_lat = np.sin(lat)
-    cos_lat = np.cos(lat)
-    sin_lon = np.sin(lon)
-    cos_lon = np.cos(lon)
-
-    # Transform to ENU
-    enu = np.array([
-        -sin_lon * e[0] + cos_lon * e[1],
-        -sin_lat * cos_lon * e[0] - sin_lat * sin_lon * e[1] + cos_lat * e[2],
-        cos_lat * cos_lon * e[0] + cos_lat * sin_lon * e[1] + sin_lat * e[2]
-    ])
-
-    # Azimuth and elevation
-    az = np.arctan2(enu[0], enu[1])
-    if az < 0:
-        az += 2 * np.pi
-
-    el = np.arcsin(enu[2])
-
+    az, el = cssrlib.gnss.satazel(np.asarray(pos, dtype=float), np.asarray(e, dtype=float))
+    if az < 0.0:
+        az += 2.0 * np.pi
     return az, el
 
 
@@ -266,3 +242,23 @@ def satexclude(sat, var, svh, nav=None):
     # - Satellite specific exclusions
 
     return False
+
+
+def to_cssrlib_sat_num(sat_num: int) -> int:
+    """Convert a pyins satellite number to cssrlib's numbering scheme."""
+
+    sys_char = sys2char(sat2sys(sat_num)).strip()
+    if not sys_char:
+        return 0
+
+    prn = sat2prn(sat_num)
+    if prn <= 0:
+        return 0
+
+    prn_cssr = prn - 100 if sys_char == 'S' else prn
+    if prn_cssr <= 0:
+        return 0
+
+    sat_id = f"{sys_char}{int(prn_cssr):02d}"
+    cssr_sat = id2sat(sat_id)
+    return cssr_sat if cssr_sat >= 0 else 0
