@@ -98,7 +98,7 @@ def test_dd_residual_matches_cssrlib_geometry():
             cssr_rover[sat_id] - cssr_rover[ref_sat_id]
             - (cssr_base[sat_id] - cssr_base[ref_sat_id])
         )
-        assert np.isclose(dd["dd_residual_m"], cssr_dd, atol=0.5)
+        assert np.isclose(dd["dd_residual_m"], cssr_dd, atol=0.01)
 
     assert residuals_m, "Expected at least one residual computed in meters"
     assert np.all(np.isfinite(residuals_m))
