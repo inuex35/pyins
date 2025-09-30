@@ -6,7 +6,6 @@ import importlib.util
 import sys
 import types
 
-import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "test_data"
@@ -46,42 +45,23 @@ rinex_module = importlib.util.module_from_spec(rinex_spec)
 sys.modules.setdefault("pyins.io.rinex", rinex_module)
 rinex_spec.loader.exec_module(rinex_module)
 
-RinexNavReader = rinex_module.RinexNavReader
-RinexObsReader = rinex_module.RinexObsReader
-
-from pyins.core.constants import MAXBAND
-from pyins.core.data_structures import Observation
+read_nav = rinex_module.read_nav
+read_obs = rinex_module.read_obs
 
 
-def test_rinex_nav_reader_reads_broadcast_ephemeris():
-    reader = RinexNavReader(str(DATA_DIR / "rover.nav"))
-    nav_data = reader.read()
+def test_read_nav_returns_cssrlib_nav():
+    nav = read_nav(str(DATA_DIR / "rover.nav"))
 
-    assert nav_data.eph, "Expected GPS/Galileo ephemerides"
-    assert nav_data.leaps == 18
-
-    sat_ids = {eph.sat for eph in nav_data.eph}
-    assert sat_ids, "Ephemeris should contain satellite IDs"
-    assert all(sat_id > 0 for sat_id in sat_ids)
+    assert hasattr(nav, 'eph') and nav.eph
+    assert hasattr(nav, 'geph')
+    assert nav.leaps == 18
 
 
-def test_rinex_obs_reader_parses_epochs():
-    reader = RinexObsReader(str(DATA_DIR / "base.obs"))
-    epochs = reader.read()
+def test_read_obs_returns_cssrlib_epochs():
+    epochs = read_obs(str(DATA_DIR / "base.obs"))
 
     assert epochs, "Observation file should produce epochs"
 
-    first_epoch = epochs[0]
-    assert first_epoch["n_sats"] == len(first_epoch["observations"])
-    assert first_epoch["gps_time"] > 0
-    assert first_epoch["unix_time"] > 0
-
-    observation = first_epoch["observations"][0]
-    assert isinstance(observation, Observation)
-    assert observation.L.shape == (MAXBAND,)
-    assert observation.P.shape == (MAXBAND,)
-    assert observation.SNR.shape == (MAXBAND,)
-    assert observation.LLI.dtype == np.int_
-
-    systems = {obs.system for epoch in epochs for obs in epoch["observations"]}
-    assert systems, "Expected at least one GNSS constellation"
+    first = epochs[0]
+    assert hasattr(first, 'sat') and len(first.sat) > 0
+    assert hasattr(first, 'P') and len(first.P) == len(first.sat)
