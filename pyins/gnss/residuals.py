@@ -7,9 +7,10 @@ from typing import Dict
 
 import numpy as np
 
-from cssrlib.ephemeris import satpos as cssr_satpos
 from cssrlib.gnss import ecef2pos, geodist, rCST, satazel, sat2id, tropmapf, tropmodel
 from cssrlib.pntpos import ionmodel
+
+from .geometry import compute_satellite_positions
 
 
 @dataclass
@@ -45,29 +46,6 @@ def _transmit_time(reception_time, pseudorange: float, sys_char: str):
         t_obs = gpst2utc(t_obs)
         t_obs = timeadd(t_obs, 10800.0)
     return timeadd(t_obs, -pseudorange / rCST.CLIGHT)
-
-
-def compute_satellite_positions(obs_epoch, nav):
-    n = len(obs_epoch.sat)
-    positions = np.zeros((n, 3))
-    clocks = np.zeros(n)
-    health = np.full(n, -1, dtype=int)
-
-    for idx, sat in enumerate(obs_epoch.sat):
-        sat_id = sat2id(sat)
-        sys_char = sat_id[0] if sat_id else 'G'
-        pr = _first_valid_pseudorange(np.asarray(obs_epoch.P[idx], dtype=float))
-        if pr is None:
-            continue
-        t_tx = _transmit_time(obs_epoch.t, pr, sys_char)
-        rs, _, dts, svh = cssr_satpos(sat, t_tx, nav)
-        if rs is None or dts is None or np.isnan(rs).any() or np.isnan(dts).any():
-            continue
-        positions[idx] = rs[0]
-        clocks[idx] = dts[0]
-        health[idx] = svh[0]
-
-    return positions, clocks, health
 
 
 def compute_zero_diff_residuals(obs_epoch, nav, receiver_pos: np.ndarray,

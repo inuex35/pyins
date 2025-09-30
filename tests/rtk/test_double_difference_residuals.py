@@ -16,7 +16,14 @@ CSSRLIB_SRC = REPO_ROOT / "cssrlib" / "src"
 if str(CSSRLIB_SRC) not in sys.path:
     sys.path.insert(0, str(CSSRLIB_SRC))
 
-from pyins.io import parse_rinex_approx_position, read_nav, read_obs, reference_position_from_pos
+from copy import deepcopy
+
+from cssrlib.gnss import sat2id
+from cssrlib.pntpos import stdpos
+
+from pyins.gnss.geometry import compute_satellite_positions
+from pyins.io import (parse_rinex_approx_position, read_nav, read_obs,
+                      reference_position_from_pos)
 from pyins.rtk.double_difference import corrected_range, form_double_differences
 
 
@@ -56,6 +63,12 @@ def test_dd_residual_matches_cssrlib_geometry():
 
     assert dd_entries, "Expected double-difference measurements"
 
+    positions_rover, clocks_rover, _ = compute_satellite_positions(rover_epoch, nav)
+    positions_base, clocks_base, _ = compute_satellite_positions(base_epoch, nav)
+
+    cssr_rover = _cssrlib_residuals(nav, rover_epoch, rover_ref_ecef, positions_rover, clocks_rover)
+    cssr_base = _cssrlib_residuals(nav, base_epoch, base_ecef, positions_base, clocks_base)
+
     residuals_m = []
 
     for dd in dd_entries:
@@ -74,5 +87,36 @@ def test_dd_residual_matches_cssrlib_geometry():
         assert np.isclose(dd["dd_residual_m"], expected_residual, atol=0.2)
         residuals_m.append(dd["dd_residual_m"])
 
+        sat_id = dd["sat"]
+        ref_sat_id = dd["ref_sat"]
+        if sat_id not in cssr_rover or ref_sat_id not in cssr_rover:
+            continue
+        if sat_id not in cssr_base or ref_sat_id not in cssr_base:
+            continue
+
+        cssr_dd = (
+            cssr_rover[sat_id] - cssr_rover[ref_sat_id]
+            - (cssr_base[sat_id] - cssr_base[ref_sat_id])
+        )
+        assert np.isclose(dd["dd_residual_m"], cssr_dd, atol=0.5)
+
     assert residuals_m, "Expected at least one residual computed in meters"
     assert np.all(np.isfinite(residuals_m))
+
+
+def _cssrlib_residuals(nav, obs_epoch, receiver_pos, positions, clocks):
+    nav_copy = deepcopy(nav)
+    solver = stdpos(nav_copy, pos0=receiver_pos)
+    solver.nav.t = obs_epoch.t
+    vs = np.zeros_like(positions)
+
+    y, *_ = solver.zdres(obs_epoch, None, None, positions, vs, clocks, solver.nav.x)
+    residuals = {}
+    for idx, sat in enumerate(obs_epoch.sat):
+        sat_id = sat2id(sat)
+        if not sat_id:
+            continue
+        if idx >= obs_epoch.P.shape[0] or obs_epoch.P[idx][0] <= 0:
+            continue
+        residuals[sat_id] = float(y[idx, 0])
+    return residuals
