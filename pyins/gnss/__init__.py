@@ -47,7 +47,14 @@ Examples:
     >>> sat_info = compute_satellite_info(obs_data, nav_data, time)
 """
 
+from .geometry import compute_satellite_positions
+from .residuals import compute_zero_diff_residuals
 from .satellite_positions import compute_satellite_info
 from .spp import single_point_positioning
 
-__all__ = ['single_point_positioning', 'compute_satellite_info']
+__all__ = [
+    'single_point_positioning',
+    'compute_satellite_info',
+    'compute_satellite_positions',
+    'compute_zero_diff_residuals',
+]
