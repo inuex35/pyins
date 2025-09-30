@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import List
 
-from cssrlib.gnss import Nav
+from cssrlib.gnss import Nav, rSigRnx, sys2char
 from cssrlib.rinex import rnxdec
 
 
@@ -44,14 +44,17 @@ def _prepare_decoder(decoder: rnxdec) -> None:
                 sig_list.append(sig_list[-1])
 
 
-def read_obs(filename: str) -> List:
+def read_obs(filename: str, signal_codes: List[str] | None = None) -> List:
     """Decode a RINEX observation file into cssrlib Obs epochs."""
 
     decoder = rnxdec()
+    if signal_codes:
+        decoder.setSignals([rSigRnx(code) for code in signal_codes])
     if decoder.decode_obsh(filename) < 0:
         raise RuntimeError("Unsupported RINEX version")
 
-    _prepare_decoder(decoder)
+    if not signal_codes:
+        _prepare_decoder(decoder)
 
     epochs: List = []
     while True:
@@ -60,6 +63,41 @@ def read_obs(filename: str) -> List:
             break
         epochs.append(deepcopy(obs))
     return epochs
+
+
+def _extract_signal_codes(decoder: rnxdec) -> List[str]:
+    codes: List[str] = []
+    for sys_enum, typ_dict in decoder.sig_map.items():
+        sys_char = sys2char(sys_enum)
+        for sig in typ_dict.values():
+            code = f"{sys_char}{sig.str()}"
+            if code not in codes:
+                codes.append(code)
+    return codes
+
+
+def read_aligned_obs(reference_filename: str, other_filename: str) -> tuple[List, List]:
+    """Decode two RINEX obs files keeping only common signal definitions."""
+
+    ref_dec = rnxdec()
+    if ref_dec.decode_obsh(reference_filename) < 0:
+        raise RuntimeError("Unsupported RINEX version for reference file")
+
+    other_dec = rnxdec()
+    if other_dec.decode_obsh(other_filename) < 0:
+        raise RuntimeError("Unsupported RINEX version for target file")
+
+    ref_codes = _extract_signal_codes(ref_dec)
+    other_codes = set(_extract_signal_codes(other_dec))
+    common_codes = [code for code in ref_codes if code in other_codes]
+
+    if not common_codes:
+        raise RuntimeError("No common observation signals between the provided RINEX files")
+
+    return (
+        read_obs(reference_filename, common_codes),
+        read_obs(other_filename, common_codes),
+    )
 
 
 class RinexNavReader:
@@ -75,8 +113,9 @@ class RinexNavReader:
 class RinexObsReader:
     """Compatibility wrapper returning cssrlib Obs epochs."""
 
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, signal_codes: List[str] | None = None):
         self.filename = Path(filename)
+        self.signal_codes = signal_codes
 
     def read(self) -> List:
-        return read_obs(str(self.filename))
+        return read_obs(str(self.filename), self.signal_codes)

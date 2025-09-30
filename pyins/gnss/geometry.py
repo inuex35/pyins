@@ -18,13 +18,9 @@ def _first_valid_pseudorange(p_values: np.ndarray) -> float | None:
 
 
 def _transmit_time(reception_time, pseudorange: float, sys_char: str):
-    t_obs = reception_time
-    if sys_char == 'C':  # BeiDou uses BDT
-        t_obs = gpst2bdt(t_obs)
-    elif sys_char == 'R':  # GLONASS uses UTC+3h
-        t_obs = gpst2utc(t_obs)
-        t_obs = timeadd(t_obs, 10800.0)
-    return timeadd(t_obs, -pseudorange / rCST.CLIGHT)
+    from cssrlib.gnss import timeadd
+
+    return timeadd(reception_time, -pseudorange / rCST.CLIGHT)
 
 
 def compute_satellite_positions(obs_epoch, nav) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
