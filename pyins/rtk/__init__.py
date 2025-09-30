@@ -20,10 +20,12 @@ from .lambda_rtklib import RTKLIBAmbiguityResolver
 from .cycle_slip import CycleSlipDetector
 from .dd_least_squares import DDLeastSquares, interpolate_epoch, interpolate_observations
 from .double_difference import form_double_differences
+from .single_difference import form_single_differences
 # from .rtk_processor import RTKProcessor  # Commented out - needs refactoring
 
 __all__ = [
     'form_double_differences',
+    'form_single_differences',
     'DDLeastSquares',
     'interpolate_epoch',
     'interpolate_observations',

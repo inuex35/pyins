@@ -1,4 +1,4 @@
-"""Validate cssrlib-based double-difference residual computation."""
+"""Validate cssrlib-based single-difference residual computation."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from cssrlib.pntpos import stdpos
 from pyins.gnss.geometry import compute_satellite_positions
 from pyins.io import (parse_rinex_approx_position, read_nav, read_obs,
                       reference_position_from_pos)
-from pyins.rtk.double_difference import corrected_range, form_double_differences
+from pyins.rtk.single_difference import form_single_differences
 
 
 def _gps_seconds(obs) -> float:
@@ -37,7 +37,7 @@ def _nearest_epoch(epochs, gps_time):
     return min(epochs, key=lambda epoch: abs(_gps_seconds(epoch) - gps_time))
 
 
-def test_dd_residual_matches_cssrlib_geometry():
+def test_single_difference_residual_matches_cssrlib_geometry():
     base_obs_path = DATA_DIR / "base.obs"
     rover_obs_path = DATA_DIR / "main.obs"
     rover_nav_path = DATA_DIR / "rover.nav"
@@ -53,7 +53,7 @@ def test_dd_residual_matches_cssrlib_geometry():
     rover_epoch = _nearest_epoch(rover_epochs, gps_time_ref)
     base_epoch = _nearest_epoch(base_epochs, gps_time_ref)
 
-    dd_entries = form_double_differences(
+    sd_entries = form_single_differences(
         rover_epoch,
         base_epoch,
         nav,
@@ -62,7 +62,7 @@ def test_dd_residual_matches_cssrlib_geometry():
         min_elevation_deg=10.0,
     )
 
-    assert dd_entries, "Expected double-difference measurements"
+    assert sd_entries, "Expected single-difference measurements"
 
     positions_rover, clocks_rover, _ = compute_satellite_positions(rover_epoch, nav)
     positions_base, clocks_base, _ = compute_satellite_positions(base_epoch, nav)
@@ -70,39 +70,18 @@ def test_dd_residual_matches_cssrlib_geometry():
     cssr_rover = _cssrlib_residuals(nav, rover_epoch, rover_ref_ecef, positions_rover, clocks_rover)
     cssr_base = _cssrlib_residuals(nav, base_epoch, base_ecef, positions_base, clocks_base)
 
-    residuals_m = []
-
-    for dd in dd_entries:
-        dd_range = (
-            corrected_range(dd["sat_pos"], dd["sat_clk"], rover_ref_ecef)
-            - corrected_range(dd["ref_sat_pos"], dd["ref_sat_clk"], rover_ref_ecef)
-            - (
-                corrected_range(dd["base_sat_pos"], dd["base_sat_clk"], base_ecef)
-                - corrected_range(dd["base_ref_sat_pos"], dd["base_ref_sat_clk"], base_ecef)
-            )
-        )
-
-        assert np.isclose(dd["dd_range_m"], dd_range, atol=0.1)
-
-        expected_residual = dd["dd_obs"] - dd_range
-        assert np.isclose(dd["dd_residual_m"], expected_residual, atol=0.2)
-        residuals_m.append(dd["dd_residual_m"])
-
-        sat_id = dd["sat"]
-        ref_sat_id = dd["ref_sat"]
-        if sat_id not in cssr_rover or ref_sat_id not in cssr_rover:
+    matched = 0
+    for sat_id, entry in sd_entries.items():
+        if sat_id not in cssr_rover or sat_id not in cssr_base:
             continue
-        if sat_id not in cssr_base or ref_sat_id not in cssr_base:
-            continue
+        cssr_sd = cssr_rover[sat_id] - cssr_base[sat_id]
+        assert np.isclose(entry["sd_residual"], cssr_sd, atol=0.01)
 
-        cssr_dd = (
-            cssr_rover[sat_id] - cssr_rover[ref_sat_id]
-            - (cssr_base[sat_id] - cssr_base[ref_sat_id])
-        )
-        assert np.isclose(dd["dd_residual_m"], cssr_dd, atol=0.01)
+        expected_predicted = entry["sd_obs"] - entry["sd_residual"]
+        assert np.isclose(entry["sd_predicted"], expected_predicted, atol=0.01)
+        matched += 1
 
-    assert residuals_m, "Expected at least one residual computed in meters"
-    assert np.all(np.isfinite(residuals_m))
+    assert matched, "Expected at least one satellite matched for CSSRLIB comparison"
 
 
 def _cssrlib_residuals(nav, obs_epoch, receiver_pos, positions, clocks):
